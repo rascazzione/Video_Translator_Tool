@@ -261,7 +261,7 @@ class QwenForcedAligner:
     ) -> List[Dict[str, Any]]:
         """Align using qwen_asr backend."""
         # qwen-asr package API: align(audio, text, language)
-        # Note: sampling_rate is not a parameter, audio should be (np.ndarray, sr) tuple or path
+        # Audio can be: path, URL, base64, or (np.ndarray, sr) tuple
         audio_input = (audio, sample_rate)
         results = self._model.align(
             audio=audio_input,
@@ -270,15 +270,32 @@ class QwenForcedAligner:
         )
         
         # Parse results
+        # According to docs: results[0] is a list of segments
+        # Each segment has: text, start_time, end_time attributes
         segments = []
-        if isinstance(results, list):
-            for result in results:
-                if hasattr(result, "text"):
-                    segments.append({
-                        "text": result.text,
-                        "start": result.start_time,
-                        "end": result.end_time,
-                    })
+        
+        if isinstance(results, list) and len(results) > 0:
+            # results[0] contains the segments list
+            first_result = results[0]
+            
+            if isinstance(first_result, (list, tuple)):
+                # It's a list of segment objects
+                for seg in first_result:
+                    if hasattr(seg, "text"):
+                        segments.append({
+                            "text": seg.text,
+                            "start": seg.start_time,
+                            "end": seg.end_time,
+                        })
+            elif hasattr(first_result, "segments"):
+                # It has segments attribute
+                for seg in first_result.segments:
+                    if hasattr(seg, "text"):
+                        segments.append({
+                            "text": seg.text,
+                            "start": seg.start_time,
+                            "end": seg.end_time,
+                        })
         elif hasattr(results, "segments"):
             segments = results.segments
         
