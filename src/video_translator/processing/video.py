@@ -149,22 +149,49 @@ class VideoProcessor:
         audio_path = Path(audio_path)
         output_path = Path(output_path)
         
+        # Get video duration to pad audio if needed
+        video_info = self.get_video_info(video_path)
+        video_duration = video_info.duration_seconds
+        
+        logger.info(f"Replacing audio in {video_path.name}...")
+        logger.info(f"Video duration: {video_duration}s")
+        
+        # Create temp directory for padded audio
+        import tempfile
+        import os
+        
+        # Pad audio to match video duration
+        padded_audio = audio_path.parent / f"padded_{audio_path.name}"
+        
+        # Use afilter to pad audio with silence to match video duration
+        pad_cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(audio_path),
+            "-af", f"apad=whole_dur={video_duration}",
+            str(padded_audio),
+        ]
+        
+        result = subprocess.run(pad_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning(f"Audio padding failed: {result.stderr}")
+            # Fall back to original audio
+            padded_audio = audio_path
+        
         # Use -map to select all streams except audio from video
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-i", str(video_path),
-            "-i", str(audio_path),
+            "-i", str(padded_audio),
             "-c:v", "copy",
             "-c:a", audio_codec,
             "-map", "0",  # All streams from video
             "-map", "-0:a",  # Exclude audio from video
-            "-map", "1:a",  # Add new audio
-            "-shortest",
+            "-map", "1:a",  # Add new (padded) audio
             str(output_path),
         ]
         
-        logger.info(f"Replacing audio in {video_path.name}...")
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
