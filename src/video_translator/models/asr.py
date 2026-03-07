@@ -188,9 +188,24 @@ class QwenASR:
         result = results[0]
         
         # Extract timestamps if available
+        # time_stamps is a ForcedAlignResult with items containing ForcedAlignItem objects
         timestamps = []
         if hasattr(result, 'time_stamps') and result.time_stamps:
-            timestamps = list(result.time_stamps)
+            time_stamps_result = result.time_stamps
+            # Check if it's a ForcedAlignResult with items
+            if hasattr(time_stamps_result, 'items'):
+                for item in time_stamps_result.items:
+                    timestamps.append({
+                        "text": item.text,
+                        "start": item.start_time,
+                        "end": item.end_time,
+                    })
+            else:
+                # Fallback: try to convert to list
+                try:
+                    timestamps = list(time_stamps_result)
+                except Exception:
+                    timestamps = []
         
         # Calculate audio duration
         try:
