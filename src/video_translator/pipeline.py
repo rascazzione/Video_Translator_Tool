@@ -255,7 +255,7 @@ class VideoTranslator:
                 }
                 for ts in asr_result.timestamps
             ]
-            srt_path = generate_srt(
+            srt_path = self.subtitle_generator.generate(
                 segments,
                 output_dir / f"{video_path.stem}.srt",
             )
