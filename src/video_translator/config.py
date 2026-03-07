@@ -30,7 +30,12 @@ class Config(BaseSettings):
     
     qwen_tts_model: str = Field(
         default="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-        description="HuggingFace model ID for TTS",
+        description="HuggingFace model ID for TTS (CustomVoice mode)",
+    )
+    
+    qwen_tts_base_model: str = Field(
+        default="Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        description="HuggingFace model ID for TTS Base model (for voice cloning)",
     )
     
     qwen_aligner_model: str = Field(

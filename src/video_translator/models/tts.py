@@ -71,23 +71,27 @@ class QwenTTS:
         precision: str = "bf16",
         flash_attention: bool = True,
         cache_dir: Optional[str] = None,
+        base_model_name: Optional[str] = None,
     ):
         """Initialize Qwen3-TTS model.
         
         Args:
-            model_name: HuggingFace model ID.
+            model_name: HuggingFace model ID for CustomVoice/VoiceDesign.
             device: Device to run on ('cuda', 'mps', 'cpu', or None for auto).
             precision: Model precision ('bf16', 'fp16', 'fp32').
             flash_attention: Enable FlashAttention 2 for faster inference.
             cache_dir: Directory to cache model files.
+            base_model_name: HuggingFace model ID for Base model (voice cloning).
         """
         self.model_name = model_name
         self.cache_dir = cache_dir
         self.device = self._get_device(device)
         self.precision = self._get_dtype(precision)
         self.flash_attention = flash_attention
+        self.base_model_name = base_model_name or "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
         
         self._model = None
+        self._base_model = None  # For voice cloning
         
         logger.info(f"Initialized QwenTTS with model: {model_name}")
         logger.info(f"Device: {self.device}, Precision: {self.precision}")
@@ -173,6 +177,50 @@ class QwenTTS:
         
         logger.info("TTS model and tokenizer loaded successfully using qwen-tts package")
     
+    def _load_base_model(self) -> None:
+        """Load the TTS base model for voice cloning."""
+        if self._base_model is not None:
+            return
+        
+        try:
+            from qwen_tts import Qwen3TTSModel
+        except ImportError:
+            raise ImportError(
+                "Please install qwen-tts: pip install -U qwen-tts"
+            )
+        
+        logger.info(f"Loading TTS base model for voice cloning: {self.base_model_name}")
+        
+        # Prepare model kwargs for qwen-tts package
+        model_kwargs = {
+            "device_map": self.device,
+            "dtype": self.precision,
+        }
+        
+        # Add cache_dir if specified
+        if self.cache_dir:
+            model_kwargs["cache_dir"] = self.cache_dir
+        
+        # Enable FlashAttention 2 if requested and available
+        if self.device == "cuda" and self.flash_attention:
+            try:
+                from flash_attn import flash_attn_func  # noqa: F401
+                model_kwargs["attn_implementation"] = "flash_attention_2"
+                logger.info("FlashAttention 2 enabled")
+            except ImportError:
+                logger.warning("FlashAttention 2 not available, using sdpa")
+                model_kwargs["attn_implementation"] = "sdpa"
+        else:
+            model_kwargs["attn_implementation"] = "sdpa"
+        
+        # Load base model using official qwen-tts package
+        self._base_model = Qwen3TTSModel.from_pretrained(
+            self.base_model_name,
+            **model_kwargs,
+        )
+        
+        logger.info("TTS base model loaded successfully for voice cloning")
+    
     def synthesize(
         self,
         text: str,
@@ -228,6 +276,9 @@ class QwenTTS:
     ) -> TTSResult:
         """Generate speech by cloning voice from reference audio.
         
+        Note: Voice cloning requires the Base model (Qwen3-TTS-12Hz-1.7B-Base).
+        The CustomVoice model does not support voice cloning.
+        
         Args:
             text: Text to synthesize.
             reference_audio: Path to reference audio or audio array.
@@ -238,7 +289,7 @@ class QwenTTS:
         Returns:
             TTSResult with cloned voice audio.
         """
-        self._load_model()
+        self._load_base_model()
         
         # Load reference audio if path
         if isinstance(reference_audio, (str, Path)):
@@ -246,8 +297,8 @@ class QwenTTS:
         else:
             ref_audio = (reference_audio, sample_rate)
         
-        # Generate using official qwen-tts API
-        wavs, sr = self._model.generate_voice_clone(
+        # Generate using official qwen-tts API with base model
+        wavs, sr = self._base_model.generate_voice_clone(
             text=text,
             language=language,
             ref_audio=ref_audio,
