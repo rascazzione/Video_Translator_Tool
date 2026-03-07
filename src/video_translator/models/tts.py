@@ -1,4 +1,4 @@
-"""Qwen3-TTS wrapper for text-to-speech synthesis."""
+"""Qwen3-TTS wrapper for text-to-speech synthesis using official qwen-tts package."""
 
 import logging
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ class TTSResult:
 
 
 class QwenTTS:
-    """Wrapper for Qwen3-TTS model.
+    """Wrapper for Qwen3-TTS model using the official qwen-tts package.
     
     Supports:
     - Base TTS with preset voices
@@ -44,11 +44,18 @@ class QwenTTS:
         >>> sf.write("output.wav", result.audio, result.sample_rate)
     """
     
-    # Preset voices for CustomVoice mode
-    PRESET_VOICES = [
-        "Aiden", "Eric", "Ryan", "Serena", "Jessica",
-        "Michael", "Emily", "David", "Sarah", "James",
-    ]
+    # Preset voices for CustomVoice mode (from official docs)
+    PRESET_VOICES = {
+        "Vivian": "Bright, slightly edgy young female voice (Chinese)",
+        "Serena": "Warm, gentle young female voice (Chinese)",
+        "Uncle_Fu": "Seasoned male voice with low, mellow timbre (Chinese)",
+        "Dylan": "Youthful Beijing male voice (Chinese Beijing Dialect)",
+        "Eric": "Lively Chengdu male voice (Chinese Sichuan Dialect)",
+        "Ryan": "Dynamic male voice with strong rhythmic drive (English)",
+        "Aiden": "Sunny American male voice with clear midrange (English)",
+        "Ono_Anna": "Playful Japanese female voice (Japanese)",
+        "Sohee": "Warm Korean female voice with rich emotion (Korean)",
+    }
     
     # Supported languages
     SUPPORTED_LANGUAGES = [
@@ -81,8 +88,6 @@ class QwenTTS:
         self.flash_attention = flash_attention
         
         self._model = None
-        self._tokenizer = None
-        self._config = None
         
         logger.info(f"Initialized QwenTTS with model: {model_name}")
         logger.info(f"Device: {self.device}, Precision: {self.precision}")
@@ -108,26 +113,30 @@ class QwenTTS:
         return dtype_map.get(precision, torch.float32)
     
     def _load_model(self) -> None:
-        """Load the TTS model and tokenizer."""
+        """Load the TTS model using the official qwen-tts package."""
         if self._model is not None:
             return
         
         try:
-            from transformers import AutoModel, AutoTokenizer
+            from qwen_tts import Qwen3TTSModel
         except ImportError:
             raise ImportError(
-                "Please install transformers: pip install transformers>=4.51.0"
+                "Please install qwen-tts: pip install -U qwen-tts"
             )
         
         logger.info(f"Loading TTS model: {self.model_name}")
         
-        # Prepare model kwargs
+        # Prepare model kwargs for qwen-tts package
         model_kwargs = {
-            "torch_dtype": self.precision,
-            "low_cpu_mem_usage": True,
-            "trust_remote_code": True,
+            "device_map": self.device,
+            "dtype": self.precision,
         }
         
+        # Add cache_dir if specified
+        if self.cache_dir:
+            model_kwargs["cache_dir"] = self.cache_dir
+        
+        # Enable FlashAttention 2 if requested and available
         if self.device == "cuda" and self.flash_attention:
             try:
                 from flash_attn import flash_attn_func  # noqa: F401
@@ -139,26 +148,13 @@ class QwenTTS:
         else:
             model_kwargs["attn_implementation"] = "sdpa"
         
-        # Load tokenizer
-        self._tokenizer = AutoTokenizer.from_pretrained(
+        # Load model using official qwen-tts package
+        self._model = Qwen3TTSModel.from_pretrained(
             self.model_name,
-            cache_dir=self.cache_dir,
-            trust_remote_code=True,
-        )
-        
-        # Load model
-        self._model = AutoModel.from_pretrained(
-            self.model_name,
-            cache_dir=self.cache_dir,
             **model_kwargs,
         )
         
-        # Move to device
-        if self.device != "cpu":
-            self._model = self._model.to(self.device)
-        
-        self._model.eval()
-        logger.info("TTS model loaded successfully")
+        logger.info("TTS model loaded successfully using qwen-tts package")
     
     def synthesize(
         self,
@@ -166,16 +162,14 @@ class QwenTTS:
         language: str = "English",
         speaker: Optional[str] = None,
         instruction: Optional[str] = None,
-        speed: float = 1.0,
     ) -> TTSResult:
-        """Generate speech from text using preset voice.
+        """Generate speech from text using preset voice (CustomVoice mode).
         
         Args:
             text: Text to synthesize.
             language: Target language.
-            speaker: Preset speaker name (e.g., "Aiden", "Serena").
+            speaker: Preset speaker name (e.g., "Aiden", "Serena", "Vivian").
             instruction: Optional style instruction.
-            speed: Speech speed multiplier (0.5-2.0).
         
         Returns:
             TTSResult with generated audio.
@@ -185,24 +179,24 @@ class QwenTTS:
         if language not in self.SUPPORTED_LANGUAGES:
             logger.warning(f"Language '{language}' may not be supported")
         
-        # Build prompt for CustomVoice mode
-        prompt = self._build_custom_voice_prompt(
+        # Use default speaker if none provided
+        if speaker is None:
+            speaker = "Aiden"
+        
+        # Generate using official qwen-tts API
+        wavs, sr = self._model.generate_custom_voice(
             text=text,
             language=language,
             speaker=speaker,
-            instruction=instruction,
+            instruct=instruction or "",
         )
         
-        # Generate audio
-        audio = self._generate(prompt)
-        
-        # Calculate duration (assuming 24kHz sample rate for Qwen3-TTS)
-        sample_rate = 24000
-        duration = len(audio) / sample_rate
+        audio = wavs[0]
+        duration = len(audio) / sr
         
         return TTSResult(
             audio=audio,
-            sample_rate=sample_rate,
+            sample_rate=sr,
             duration=duration,
             voice_id=speaker,
         )
@@ -231,27 +225,24 @@ class QwenTTS:
         
         # Load reference audio if path
         if isinstance(reference_audio, (str, Path)):
-            ref_audio, ref_sr = self._load_audio(str(reference_audio), target_sr=sample_rate)
+            ref_audio = str(reference_audio)
         else:
-            ref_audio = reference_audio
+            ref_audio = (reference_audio, sample_rate)
         
-        # Generate prompt with voice cloning
-        prompt = self._build_voice_clone_prompt(
+        # Generate using official qwen-tts API
+        wavs, sr = self._model.generate_voice_clone(
             text=text,
-            reference_audio=ref_audio,
-            reference_text=reference_text,
             language=language,
+            ref_audio=ref_audio,
+            ref_text=reference_text,
         )
         
-        # Generate audio
-        audio = self._generate(prompt)
-        
-        sample_rate = 24000
-        duration = len(audio) / sample_rate
+        audio = wavs[0]
+        duration = len(audio) / sr
         
         return TTSResult(
             audio=audio,
-            sample_rate=sample_rate,
+            sample_rate=sr,
             duration=duration,
             voice_id="cloned",
         )
@@ -280,125 +271,22 @@ class QwenTTS:
         """
         self._load_model()
         
-        # Build prompt for VoiceDesign mode
-        prompt = self._build_voice_design_prompt(
+        # Generate using official qwen-tts API
+        wavs, sr = self._model.generate_voice_design(
             text=text,
-            description=voice_description,
             language=language,
+            instruct=voice_description,
         )
         
-        # Generate audio
-        audio = self._generate(prompt)
-        
-        sample_rate = 24000
-        duration = len(audio) / sample_rate
+        audio = wavs[0]
+        duration = len(audio) / sr
         
         return TTSResult(
             audio=audio,
-            sample_rate=sample_rate,
+            sample_rate=sr,
             duration=duration,
             voice_id=f"designed:{voice_description[:20]}",
         )
-    
-    def _build_custom_voice_prompt(
-        self,
-        text: str,
-        language: str,
-        speaker: Optional[str],
-        instruction: Optional[str],
-    ) -> str:
-        """Build prompt for CustomVoice mode."""
-        if speaker is None:
-            speaker = "Aiden"  # Default speaker
-        
-        prompt_parts = [
-            f"<|text|>{text}<|/text|>",
-            f"<|language|>{language}<|/language|>",
-            f"<|speaker|>{speaker}<|/speaker|>",
-        ]
-        
-        if instruction:
-            prompt_parts.append(f"<|instruction|>{instruction}<|/instruction|>")
-        
-        prompt_parts.append("<|audio|>")
-        return "".join(prompt_parts)
-    
-    def _build_voice_clone_prompt(
-        self,
-        text: str,
-        reference_audio: np.ndarray,
-        reference_text: Optional[str],
-        language: str,
-    ) -> str:
-        """Build prompt for voice cloning mode."""
-        # Note: Actual implementation would need to encode reference audio
-        # This is a simplified placeholder
-        prompt_parts = [
-            "<|voice_clone|>",
-            f"<|text|>{text}<|/text|>",
-            f"<|language|>{language}<|/language|>",
-        ]
-        
-        if reference_text:
-            prompt_parts.append(f"<|reference_text|>{reference_text}<|/reference_text|>")
-        
-        prompt_parts.append("<|audio|>")
-        return "".join(prompt_parts)
-    
-    def _build_voice_design_prompt(
-        self,
-        text: str,
-        description: str,
-        language: str,
-    ) -> str:
-        """Build prompt for VoiceDesign mode."""
-        prompt_parts = [
-            "<|voice_design|>",
-            f"<|description|>{description}<|/description|>",
-            f"<|text|>{text}<|/text|>",
-            f"<|language|>{language}<|/language|>",
-            "<|audio|>",
-        ]
-        return "".join(prompt_parts)
-    
-    def _generate(self, prompt: str) -> np.ndarray:
-        """Generate audio from prompt."""
-        # Tokenize
-        inputs = self._tokenizer(
-            prompt,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=2048,
-        )
-        
-        # Move to device
-        if self.device != "cpu":
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        
-        # Generate
-        with torch.inference_mode():
-            outputs = self._model.generate(
-                **inputs,
-                max_new_tokens=4096,
-                do_sample=True,
-                temperature=0.7,
-            )
-        
-        # Decode - this is simplified, actual implementation depends on model
-        # Qwen3-TTS uses a speech tokenizer that needs proper decoding
-        audio = self._decode_audio(outputs[0])
-        
-        return audio
-    
-    def _decode_audio(self, token_ids: torch.Tensor) -> np.ndarray:
-        """Decode audio tokens to waveform."""
-        # This is a placeholder - actual implementation needs
-        # the speech tokenizer from Qwen3-TTS
-        # For now, return silence - proper implementation requires
-        # the Qwen-TTS-Tokenizer
-        logger.warning("Audio decoding requires Qwen-TTS-Tokenizer")
-        return np.zeros(24000, dtype=np.float32)  # 1 second of silence
     
     def _load_audio(
         self,

@@ -59,6 +59,7 @@ dependencies = [
     "pydantic-settings>=2.1.0",
     "huggingface-hub>=0.20.0",
     "qwen-asr>=0.1.0",
+    "qwen-tts>=0.1.0",
 ]
 
 [project.optional-dependencies]
