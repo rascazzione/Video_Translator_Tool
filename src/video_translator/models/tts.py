@@ -118,13 +118,23 @@ class QwenTTS:
             return
         
         try:
-            from qwen_tts import Qwen3TTSModel
+            from qwen_tts import Qwen3TTSModel, Qwen3TTSTokenizer
         except ImportError:
             raise ImportError(
                 "Please install qwen-tts: pip install -U qwen-tts"
             )
         
         logger.info(f"Loading TTS model: {self.model_name}")
+        
+        # Determine tokenizer model based on TTS model
+        # Qwen3-TTS-12Hz models use Qwen3-TTS-Tokenizer-12Hz
+        # Qwen3-TTS-25Hz models use Qwen3-TTS-Tokenizer-25Hz
+        if "12Hz" in self.model_name:
+            tokenizer_name = "Qwen/Qwen3-TTS-Tokenizer-12Hz"
+        elif "25Hz" in self.model_name:
+            tokenizer_name = "Qwen/Qwen3-TTS-Tokenizer-25Hz"
+        else:
+            tokenizer_name = "Qwen/Qwen3-TTS-Tokenizer-12Hz"  # Default
         
         # Prepare model kwargs for qwen-tts package
         model_kwargs = {
@@ -148,13 +158,20 @@ class QwenTTS:
         else:
             model_kwargs["attn_implementation"] = "sdpa"
         
+        # Load tokenizer first
+        logger.info(f"Loading TTS tokenizer: {tokenizer_name}")
+        self._tokenizer = Qwen3TTSTokenizer.from_pretrained(
+            tokenizer_name,
+            device_map=self.device,
+        )
+        
         # Load model using official qwen-tts package
         self._model = Qwen3TTSModel.from_pretrained(
             self.model_name,
             **model_kwargs,
         )
         
-        logger.info("TTS model loaded successfully using qwen-tts package")
+        logger.info("TTS model and tokenizer loaded successfully using qwen-tts package")
     
     def synthesize(
         self,
