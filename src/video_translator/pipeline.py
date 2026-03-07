@@ -16,6 +16,29 @@ from .processing.subtitles import SubtitleGenerator, generate_srt
 
 logger = logging.getLogger(__name__)
 
+# Language code mapping for TTS (ISO 639-1 to full language name)
+LANGUAGE_MAP = {
+    "es": "Spanish",
+    "en": "English",
+    "zh": "Chinese",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "pt": "Portuguese",
+    "ru": "Russian",
+}
+
+
+def get_language_name(code: str) -> str:
+    """Convert language code to full language name for TTS."""
+    # Check if already a full name (case-insensitive)
+    for full_name in LANGUAGE_MAP.values():
+        if code.lower() == full_name.lower():
+            return full_name
+    return LANGUAGE_MAP.get(code.lower(), code)
+
 
 @dataclass
 class TranscriptionResult:
@@ -431,7 +454,7 @@ class VideoTranslator:
                 tts_result = self.synthesize_speech(
                     text=translated_text,
                     output_path=audio_path,
-                    language=target_language,
+                    language=get_language_name(target_language),
                     voice_clone=True,
                     reference_audio=transcription.audio_path,
                 )
@@ -439,7 +462,7 @@ class VideoTranslator:
                 tts_result = self.synthesize_speech(
                     text=translated_text,
                     output_path=audio_path,
-                    language=target_language,
+                    language=get_language_name(target_language),
                     speaker=speaker,
                 )
             
