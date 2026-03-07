@@ -179,14 +179,9 @@ class QwenASR:
             "language": language,
         }
         
-        # Add forced aligner for timestamps if requested
-        if return_timestamps and forced_aligner:
+        # Add timestamps request if requested (forced aligner should already be loaded)
+        if return_timestamps:
             transcribe_kwargs["return_time_stamps"] = True
-            transcribe_kwargs["forced_aligner"] = forced_aligner
-            transcribe_kwargs["forced_aligner_kwargs"] = {
-                "dtype": self.precision,
-                "device_map": self.device,
-            }
         
         # Generate transcription using official qwen-asr API
         results = self._model.transcribe(**transcribe_kwargs)
