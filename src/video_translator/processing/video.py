@@ -151,7 +151,7 @@ class VideoProcessor:
         
         # Get video duration to pad audio if needed
         video_info = self.get_video_info(video_path)
-        video_duration = video_info.duration_seconds
+        video_duration = video_info.duration
         
         logger.info(f"Replacing audio in {video_path.name}...")
         logger.info(f"Video duration: {video_duration}s")
