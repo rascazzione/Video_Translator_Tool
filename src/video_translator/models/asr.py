@@ -53,6 +53,7 @@ class QwenASR:
         cache_dir: Optional[str] = None,
         max_inference_batch_size: int = 32,
         max_new_tokens: int = 256,
+        forced_aligner_model: Optional[str] = None,
     ):
         """Initialize Qwen3-ASR model.
         
@@ -64,6 +65,7 @@ class QwenASR:
             cache_dir: Directory to cache model files.
             max_inference_batch_size: Batch size limit for inference. -1 means unlimited.
             max_new_tokens: Maximum number of tokens to generate.
+            forced_aligner_model: HuggingFace model ID for forced aligner (e.g., "Qwen/Qwen3-ForcedAligner-0.6B").
         """
         self.model_name = model_name
         self.cache_dir = cache_dir
@@ -72,6 +74,7 @@ class QwenASR:
         self.flash_attention = flash_attention
         self.max_inference_batch_size = max_inference_batch_size
         self.max_new_tokens = max_new_tokens
+        self.forced_aligner_model = forced_aligner_model
         
         self._model = None
         
@@ -123,6 +126,15 @@ class QwenASR:
         # Add cache_dir if specified
         if self.cache_dir:
             model_kwargs["cache_dir"] = self.cache_dir
+        
+        # Add forced aligner if specified
+        if self.forced_aligner_model:
+            logger.info(f"Loading forced aligner: {self.forced_aligner_model}")
+            model_kwargs["forced_aligner"] = self.forced_aligner_model
+            model_kwargs["forced_aligner_kwargs"] = {
+                "dtype": self.precision,
+                "device_map": self.device,
+            }
         
         # Load model using official qwen-asr package
         self._model = Qwen3ASRModel.from_pretrained(

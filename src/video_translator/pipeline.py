@@ -149,6 +149,7 @@ class VideoTranslator:
                 precision=self.config.precision,
                 flash_attention=self.config.flash_attention,
                 cache_dir=str(self.config.model_cache_dir),
+                forced_aligner_model=self.aligner_model_name,
             )
         return self._asr
     
@@ -234,14 +235,13 @@ class VideoTranslator:
             output_path=output_dir / f"{video_path.stem}_audio.wav",
         )
         
-        # Step 2: Transcribe audio with forced aligner for accurate timestamps
+        # Step 2: Transcribe audio
         logger.info("Transcribing audio...")
         asr_result = self.asr.transcribe(
             audio_info.path,
             sample_rate=self.config.audio_sample_rate,
             language=language,
             return_timestamps=True,
-            forced_aligner=self.aligner_model_name,
         )
         
         # Step 3: Generate SRT if requested
