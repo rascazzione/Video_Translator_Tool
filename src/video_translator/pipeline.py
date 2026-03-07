@@ -280,6 +280,7 @@ class VideoTranslator:
         speaker: Optional[str] = None,
         voice_clone: bool = False,
         reference_audio: Optional[Path] = None,
+        reference_text: Optional[str] = None,
         voice_design: bool = False,
         voice_description: Optional[str] = None,
     ) -> TTSResult:
@@ -313,6 +314,7 @@ class VideoTranslator:
             result = self.tts.synthesize_voice_clone(
                 text=text,
                 reference_audio=reference_audio,
+                reference_text=reference_text,
                 language=language,
             )
         else:
@@ -457,6 +459,7 @@ class VideoTranslator:
                     language=get_language_name(target_language),
                     voice_clone=True,
                     reference_audio=transcription.audio_path,
+                    reference_text=transcription.text,
                 )
             else:
                 tts_result = self.synthesize_speech(
