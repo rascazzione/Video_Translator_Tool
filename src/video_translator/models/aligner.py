@@ -260,11 +260,13 @@ class QwenForcedAligner:
         sample_rate: int,
     ) -> List[Dict[str, Any]]:
         """Align using qwen_asr backend."""
+        # qwen-asr package API: align(audio, text, language)
+        # Note: sampling_rate is not a parameter, audio should be (np.ndarray, sr) tuple or path
+        audio_input = (audio, sample_rate)
         results = self._model.align(
-            audio=audio,
+            audio=audio_input,
             text=text,
             language=language,
-            sampling_rate=sample_rate,
         )
         
         # Parse results
