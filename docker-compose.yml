@@ -1,0 +1,91 @@
+# Video Translator Docker Compose
+# Provides complete stack with Redis for task queue
+
+version: '3.8'
+
+services:
+  # Main application
+  video-translator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: video-translator:latest
+    container_name: video-translator
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist models cache
+      - models_cache:/app/models_cache
+      # Output directory
+      - ./output:/app/output
+      # Optional: Mount local config
+      - ./.env:/app/.env:ro
+    environment:
+      - DEVICE=${DEVICE:-auto}
+      - PRECISION=${PRECISION:-bf16}
+      - FLASH_ATTENTION=${FLASH_ATTENTION:-true}
+      - MODEL_CACHE_DIR=/app/models_cache
+      - OUTPUT_DIR=/app/output
+      - REDIS_URL=redis://redis:6379
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    # For CPU-only mode, remove the deploy section above and uncomment:
+    # environment:
+    #   - DEVICE=cpu
+
+  # Redis for task queue
+  redis:
+    image: redis:7-alpine
+    container_name: video-translator-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+
+  # Celery worker (optional, for async processing)
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: video-translator-worker
+    volumes:
+      - models_cache:/app/models_cache
+      - ./output:/app/output
+    environment:
+      - DEVICE=${DEVICE:-auto}
+      - PRECISION=${PRECISION:-bf16}
+      - REDIS_URL=redis://redis:6379
+      - MODEL_CACHE_DIR=/app/models_cache
+      - OUTPUT_DIR=/app/output
+    depends_on:
+      - redis
+    command: celery -A video_translator.tasks worker --loglevel=info --concurrency=${CELERY_WORKERS:-2}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  models_cache:
+    name: video-translator-models
+  redis_data:
+    name: video-translator-redis
+
+networks:
+  default:
+    name: video-translator-network
