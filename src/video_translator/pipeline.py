@@ -377,7 +377,7 @@ class VideoTranslator:
         """
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         
-        # Language code mapping for NLLB
+        # Language code mapping for NLLB (BCP-47 codes)
         NLLB_LANGUAGE_MAP = {
             "spanish": "spa_Latn",
             "english": "eng_Latn",
@@ -398,18 +398,23 @@ class VideoTranslator:
         model_name = "facebook/nllb-200-distilled-600M"
         
         try:
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            # Initialize tokenizer with source language
+            tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_code)
             model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
             
-            # Translate
+            # Tokenize input
             inputs = tokenizer(text, return_tensors="pt", padding=True)
+            
+            # Generate translation with forced target language
+            target_token_id = tokenizer.convert_tokens_to_ids(target_code)
             outputs = model.generate(
                 **inputs,
-                forced_bos_token_id=tokenizer.lang_code_to_id[target_code],
+                forced_bos_token_id=target_token_id,
                 max_length=512,
             )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
             
+            logger.info(f"Translation: '{text}' -> '{translated}'")
             return translated
         except Exception as e:
             logger.error(f"Translation error: {e}")
