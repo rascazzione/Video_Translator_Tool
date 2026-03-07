@@ -526,13 +526,38 @@ class VideoTranslator:
                 logger.info("=" * 50)
                 logger.info("Step 5: Generating subtitles")
                 
-                # For now, create simple subtitle from translated text
-                # In production, align with audio for precise timing
+                # Create subtitles with proper timing based on original timestamps
+                # Adjust timestamps to account for audio delay
                 subtitle_path = output_dir / f"{input_path.stem}_{target_language}.srt"
-                segments = [
-                    {"start": 0, "end": 5, "text": translated_text[:200]}
-                ]  # Placeholder
-                generate_srt(segments, subtitle_path)
+                
+                # Use original timestamps and apply translated text
+                # Since we're doing sentence-level translation, we'll create segments
+                # based on the original timing structure
+                segments = []
+                if transcription.timestamps:
+                    # Distribute translated text across original timestamp segments
+                    # For simple cases, use the first and last timestamp
+                    first_ts = transcription.timestamps[0]
+                    last_ts = transcription.timestamps[-1]
+                    
+                    # Calculate duration of translated speech
+                    translated_duration = tts_result.duration if hasattr(tts_result, 'duration') else last_ts['end'] - first_ts['start']
+                    
+                    # Create segment with adjusted timing
+                    segments = [
+                        {
+                            "start": first_ts['start'],
+                            "end": first_ts['start'] + translated_duration,
+                            "text": translated_text,
+                        }
+                    ]
+                else:
+                    # Fallback: use default timing
+                    segments = [
+                        {"start": speech_start_time, "end": speech_start_time + 5, "text": translated_text}
+                    ]
+                
+                subtitle_path = self.subtitle_generator.generate_srt(segments, subtitle_path)
             
             return TranslationResult(
                 video_path=video_path,
