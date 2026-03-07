@@ -363,15 +363,18 @@ class VideoTranslator:
         text: str,
         source_language: str,
         target_language: str,
+        max_tokens: int = 800,
     ) -> str:
         """Translate text from source to target language.
         
         Uses the NLLB (No Language Left Behind) model for translation.
+        For long texts, automatically splits into chunks and translates each chunk.
         
         Args:
             text: Text to translate.
             source_language: Source language code.
             target_language: Target language code.
+            max_tokens: Maximum tokens per chunk (NLLB limit is 1024).
         
         Returns:
             Translated text.
@@ -403,24 +406,230 @@ class VideoTranslator:
             tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_code)
             model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
             
-            # Tokenize input
+            # Check if text needs chunking
             inputs = tokenizer(text, return_tensors="pt", padding=True)
+            input_length = inputs['input_ids'].shape[1]
             
-            # Generate translation with forced target language
-            target_token_id = tokenizer.convert_tokens_to_ids(target_code)
+            if input_length <= max_tokens:
+                # Translate as single chunk
+                logger.info(f"Translating {input_length} tokens (single chunk)")
+                target_token_id = tokenizer.convert_tokens_to_ids(target_code)
+                outputs = model.generate(
+                    **inputs,
+                    forced_bos_token_id=target_token_id,
+                    max_length=512,
+                )
+                translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                logger.info(f"Translation: '{text[:50]}...' -> '{translated[:50]}...'")
+                return translated
+            else:
+                # Split into chunks and translate each
+                logger.info(f"Translating {input_length} tokens (chunked, max {max_tokens} per chunk)")
+                return self._translate_chunked(
+                    text, tokenizer, model, source_code, target_code, max_tokens
+                )
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            # Fallback: return original text
+            return text
+    
+    def _translate_chunked(
+        self,
+        text: str,
+        tokenizer,
+        model,
+        source_code: str,
+        target_code: str,
+        max_tokens: int = 800,
+    ) -> str:
+        """Translate long text by splitting into chunks.
+        
+        Args:
+            text: Text to translate.
+            tokenizer: NLLB tokenizer.
+            model: NLLB model.
+            source_code: Source language code.
+            target_code: Target language code.
+            max_tokens: Maximum tokens per chunk.
+        
+        Returns:
+            Translated text.
+        """
+        # Split text into sentences for better chunking
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', text)
+        
+        chunks = []
+        current_chunk = []
+        current_token_count = 0
+        
+        for sentence in sentences:
+            # Estimate tokens for this sentence
+            sentence_tokens = len(tokenizer.encode(sentence, add_special_tokens=False))
+            
+            if current_token_count + sentence_tokens > max_tokens and current_chunk:
+                # Save current chunk and start new one
+                chunks.append(' '.join(current_chunk))
+                current_chunk = [sentence]
+                current_token_count = sentence_tokens
+            else:
+                current_chunk.append(sentence)
+                current_token_count += sentence_tokens
+        
+        # Add remaining chunk
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
+        # Translate each chunk
+        target_token_id = tokenizer.convert_tokens_to_ids(target_code)
+        translated_chunks = []
+        
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Translating chunk {i+1}/{len(chunks)} ({len(tokenizer.encode(chunk, add_special_tokens=False))} tokens)")
+            
+            inputs = tokenizer(chunk, return_tensors="pt", padding=True)
             outputs = model.generate(
                 **inputs,
                 forced_bos_token_id=target_token_id,
                 max_length=512,
             )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            translated_chunks.append(translated)
+            logger.info(f"Chunk {i+1}: '{chunk[:30]}...' -> '{translated[:30]}...'")
+        
+        # Combine translated chunks
+        combined = ' '.join(translated_chunks)
+        logger.info(f"Combined translation length: {len(combined)} characters")
+        return combined
+    
+    def translate_text_with_timestamps(
+        self,
+        timestamps: list,
+        source_language: str,
+        target_language: str,
+        max_tokens: int = 800,
+    ) -> dict:
+        """Translate text with timestamp preservation for long videos.
+        
+        Splits transcript into chunks based on timestamps, translates each chunk,
+        and returns both the full text and segmented translations with timing.
+        
+        Args:
+            timestamps: List of timestamp segments from ASR.
+            source_language: Source language code.
+            target_language: Target language code.
+            max_tokens: Maximum tokens per chunk.
+        
+        Returns:
+            Dictionary with 'full_text' and 'segments' (translated with timing).
+        """
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        import re
+        
+        NLLB_LANGUAGE_MAP = {
+            "spanish": "spa_Latn",
+            "english": "eng_Latn",
+            "chinese": "zho_Hans",
+            "french": "fra_Latn",
+            "german": "deu_Latn",
+            "italian": "ita_Latn",
+            "japanese": "jpn_Jpan",
+            "korean": "kor_Hang",
+            "portuguese": "por_Latn",
+            "russian": "rus_Cyrl",
+        }
+        
+        source_code = NLLB_LANGUAGE_MAP.get(source_language.lower(), "spa_Latn")
+        target_code = NLLB_LANGUAGE_MAP.get(target_language.lower(), "eng_Latn")
+        model_name = "facebook/nllb-200-distilled-600M"
+        
+        logger.info(f"Loading NLLB translation model for chunked translation...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_code)
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        target_token_id = tokenizer.convert_tokens_to_ids(target_code)
+        
+        # Group timestamps into chunks
+        chunks = []
+        current_chunk = []
+        current_token_count = 0
+        
+        for ts in timestamps:
+            text = ts.get('text', '')
+            sentence_tokens = len(tokenizer.encode(text, add_special_tokens=False))
             
-            logger.info(f"Translation: '{text}' -> '{translated}'")
-            return translated
-        except Exception as e:
-            logger.error(f"Translation error: {e}")
-            # Fallback: return original text
-            return text
+            if current_token_count + sentence_tokens > max_tokens and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = [ts]
+                current_token_count = sentence_tokens
+            else:
+                current_chunk.append(ts)
+                current_token_count += sentence_tokens
+        
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        logger.info(f"Split transcript into {len(chunks)} chunks for translation")
+        
+        # Translate each chunk
+        translated_segments = []
+        full_translations = []
+        
+        for i, chunk in enumerate(chunks):
+            # Combine text from this chunk
+            chunk_text = ' '.join(ts.get('text', '') for ts in chunk)
+            
+            logger.info(f"Translating chunk {i+1}/{len(chunks)} ({len(tokenizer.encode(chunk_text, add_special_tokens=False))} tokens)")
+            
+            # Translate
+            inputs = tokenizer(chunk_text, return_tensors="pt", padding=True)
+            outputs = model.generate(
+                **inputs,
+                forced_bos_token_id=target_token_id,
+                max_length=512,
+            )
+            translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            full_translations.append(translated)
+            
+            # For word-level segments, we need to split the translated text
+            # Simple approach: distribute translation proportionally
+            if len(chunk) == 1:
+                # Single segment - use full translation
+                translated_segments.append({
+                    'start': chunk[0]['start'],
+                    'end': chunk[0]['end'],
+                    'text': translated,
+                })
+            else:
+                # Multiple segments - split translation by word count
+                original_words = chunk_text.split()
+                translated_words = translated.split()
+                
+                word_ratio = len(translated_words) / len(original_words) if original_words else 1
+                
+                start_idx = 0
+                for j, ts in enumerate(chunk):
+                    ts_words = ts.get('text', '').split()
+                    translated_count = max(1, int(len(ts_words) * word_ratio))
+                    
+                    # Get words for this segment
+                    segment_words = translated_words[start_idx:start_idx + translated_count]
+                    segment_text = ' '.join(segment_words)
+                    
+                    translated_segments.append({
+                        'start': ts['start'],
+                        'end': ts['end'],
+                        'text': segment_text,
+                    })
+                    
+                    start_idx += translated_count
+        
+        full_text = ' '.join(full_translations)
+        logger.info(f"Translation complete: {len(full_text)} characters")
+        
+        return {
+            'full_text': full_text,
+            'segments': translated_segments,
+        }
     
     def translate_video(
         self,
@@ -465,14 +674,18 @@ class VideoTranslator:
             )
             logger.info(f"Detected language: {transcription.language}")
             
-            # Step 2: Translate text
+            # Step 2: Translate text (with chunked translation for long videos)
             logger.info("=" * 50)
             logger.info("Step 2: Translating text")
-            translated_text = self.translate_text(
-                transcription.text,
-                source_language=transcription.language,
-                target_language=target_language,
+            
+            # Use chunked translation with timestamps for long videos
+            translated_result = self.translate_text_with_timestamps(
+                transcription.timestamps,
+                transcription.language,
+                target_language,
             )
+            translated_text = translated_result['full_text']
+            translated_segments = translated_result['segments']
             
             # Save translated text
             transcript_path = output_dir / f"{input_path.stem}_translated.txt"
@@ -526,37 +739,15 @@ class VideoTranslator:
                 logger.info("=" * 50)
                 logger.info("Step 5: Generating subtitles")
                 
-                # Create subtitles with proper timing based on original timestamps
-                # Adjust timestamps to account for audio delay
+                # Use translated segments with preserved timing from chunked translation
                 subtitle_path = output_dir / f"{input_path.stem}_{target_language}.srt"
                 
-                # Use original timestamps and apply translated text
-                # Since we're doing sentence-level translation, we'll create segments
-                # based on the original timing structure
-                segments = []
-                if transcription.timestamps:
-                    # Distribute translated text across original timestamp segments
-                    # For simple cases, use the first and last timestamp
-                    first_ts = transcription.timestamps[0]
-                    last_ts = transcription.timestamps[-1]
-                    
-                    # Calculate duration of translated speech
-                    translated_duration = tts_result.duration if hasattr(tts_result, 'duration') else last_ts['end'] - first_ts['start']
-                    
-                    # Create segment with adjusted timing
-                    segments = [
-                        {
-                            "start": first_ts['start'],
-                            "end": first_ts['start'] + translated_duration,
-                            "text": translated_text,
-                        }
-                    ]
-                else:
-                    # Fallback: use default timing
-                    segments = [
-                        {"start": speech_start_time, "end": speech_start_time + 5, "text": translated_text}
-                    ]
+                # Use translated segments from chunked translation (has proper timing)
+                segments = translated_segments if translated_segments else [
+                    {"start": speech_start_time, "end": speech_start_time + 5, "text": translated_text}
+                ]
                 
+                logger.info(f"Generating subtitles with {len(segments)} segments")
                 subtitle_path = self.subtitle_generator.generate_srt(segments, subtitle_path)
             
             return TranslationResult(
