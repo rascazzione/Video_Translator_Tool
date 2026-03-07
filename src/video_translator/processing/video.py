@@ -130,6 +130,7 @@ class VideoProcessor:
         audio_path: Path,
         output_path: Path,
         audio_codec: str = "aac",
+        audio_delay: float = 0.0,
     ) -> VideoInfo:
         """Replace audio track in video with new audio.
         
@@ -141,6 +142,7 @@ class VideoProcessor:
             audio_path: Path to new audio file.
             output_path: Path for output video file.
             audio_codec: Audio codec for output.
+            audio_delay: Delay in seconds before starting the new audio.
         
         Returns:
             VideoInfo with details about output video.
@@ -155,40 +157,53 @@ class VideoProcessor:
         
         logger.info(f"Replacing audio in {video_path.name}...")
         logger.info(f"Video duration: {video_duration}s")
+        logger.info(f"Audio delay: {audio_delay}s")
         
         # Create temp directory for padded audio
         import tempfile
         import os
         
-        # Pad audio to match video duration
-        padded_audio = audio_path.parent / f"padded_{audio_path.name}"
+        # Pad audio with delay at start and padding at end to match video duration
+        delayed_audio = audio_path.parent / f"delayed_{audio_path.name}"
         
-        # Use afilter to pad audio with silence to match video duration
+        # Calculate padding needed after delay
+        # Audio needs: delay silence at start + original audio + padding at end
+        audio_info = self.get_audio_info(audio_path)
+        audio_duration = audio_info.duration
+        
+        # Build filter: add delay at start, then pad to match video duration
+        # adelay adds delay in milliseconds
+        delay_ms = int(audio_delay * 1000)
+        total_duration = video_duration
+        
+        # Use afilter to add delay at start and pad to match video duration
+        filter_cmd = f"adelay={delay_ms}|{delay_ms},apad=whole_dur={total_duration}"
+        
         pad_cmd = [
             self.ffmpeg_path,
             "-y",
             "-i", str(audio_path),
-            "-af", f"apad=whole_dur={video_duration}",
-            str(padded_audio),
+            "-af", filter_cmd,
+            str(delayed_audio),
         ]
         
         result = subprocess.run(pad_cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            logger.warning(f"Audio padding failed: {result.stderr}")
+            logger.warning(f"Audio delay/padding failed: {result.stderr}")
             # Fall back to original audio
-            padded_audio = audio_path
+            delayed_audio = audio_path
         
         # Use -map to select all streams except audio from video
         cmd = [
             self.ffmpeg_path,
             "-y",
             "-i", str(video_path),
-            "-i", str(padded_audio),
+            "-i", str(delayed_audio),
             "-c:v", "copy",
             "-c:a", audio_codec,
             "-map", "0",  # All streams from video
             "-map", "-0:a",  # Exclude audio from video
-            "-map", "1:a",  # Add new (padded) audio
+            "-map", "1:a",  # Add new (delayed/padded) audio
             str(output_path),
         ]
         

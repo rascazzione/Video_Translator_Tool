@@ -483,6 +483,13 @@ class VideoTranslator:
             logger.info("Step 3: Generating speech")
             audio_path = temp_path / "translated_audio.wav"
             
+            # Get speech start time from transcription timestamps for alignment
+            speech_start_time = 0.0
+            if transcription.timestamps and len(transcription.timestamps) > 0:
+                first_segment = transcription.timestamps[0]
+                speech_start_time = first_segment.get("start", 0.0)
+                logger.info(f"Speech starts at {speech_start_time:.2f}s in original video")
+            
             if voice_clone and transcription.audio_path:
                 tts_result = self.synthesize_speech(
                     text=translated_text,
@@ -500,7 +507,7 @@ class VideoTranslator:
                     speaker=speaker,
                 )
             
-            # Step 4: Mux audio with video
+            # Step 4: Mux audio with video (with proper timing alignment)
             logger.info("=" * 50)
             logger.info("Step 4: Muxing audio with video")
             video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
@@ -509,6 +516,7 @@ class VideoTranslator:
                 input_path,
                 audio_path,
                 video_path,
+                audio_delay=speech_start_time,
             )
             
             # Step 5: Generate subtitles (optional)
