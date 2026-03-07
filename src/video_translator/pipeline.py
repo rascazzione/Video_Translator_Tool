@@ -365,8 +365,7 @@ class VideoTranslator:
     ) -> str:
         """Translate text from source to target language.
         
-        Note: This is a placeholder. In production, integrate with
-        a translation API or model (Qwen LLM, NLLB, etc.)
+        Uses the NLLB (No Language Left Behind) model for translation.
         
         Args:
             text: Text to translate.
@@ -376,19 +375,46 @@ class VideoTranslator:
         Returns:
             Translated text.
         """
-        # Placeholder - implement actual translation
-        logger.warning(
-            "Translation not fully implemented. "
-            "Integrate with Qwen LLM or NLLB for production use."
-        )
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
         
-        # For now, return the original text
-        # In production, use something like:
-        # from transformers import pipeline
-        # translator = pipeline("translation", model="facebook/nllb-200-distilled-600M")
-        # result = translator(text, src_lang=source_language, tgt_lang=target_language)
+        # Language code mapping for NLLB
+        NLLB_LANGUAGE_MAP = {
+            "spanish": "spa_Latn",
+            "english": "eng_Latn",
+            "chinese": "zho_Hans",
+            "french": "fra_Latn",
+            "german": "deu_Latn",
+            "italian": "ita_Latn",
+            "japanese": "jpn_Jpan",
+            "korean": "kor_Hang",
+            "portuguese": "por_Latn",
+            "russian": "rus_Cyrl",
+        }
         
-        return text  # Placeholder
+        source_code = NLLB_LANGUAGE_MAP.get(source_language.lower(), "spa_Latn")
+        target_code = NLLB_LANGUAGE_MAP.get(target_language.lower(), "eng_Latn")
+        
+        logger.info(f"Loading NLLB translation model...")
+        model_name = "facebook/nllb-200-distilled-600M"
+        
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            
+            # Translate
+            inputs = tokenizer(text, return_tensors="pt", padding=True)
+            outputs = model.generate(
+                **inputs,
+                forced_bos_token_id=tokenizer.lang_code_to_id[target_code],
+                max_length=512,
+            )
+            translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            
+            return translated
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            # Fallback: return original text
+            return text
     
     def translate_video(
         self,
