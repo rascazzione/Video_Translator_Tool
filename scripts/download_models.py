@@ -89,7 +89,6 @@ def download_model(
             repo_id=repo,
             cache_dir=cache_dir,
             force_download=force,
-            show_progress=True,
         )
         print(f"✅ Downloaded: {repo}")
         return True
