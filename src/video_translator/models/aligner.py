@@ -270,34 +270,24 @@ class QwenForcedAligner:
         )
         
         # Parse results
-        # According to docs: results[0] is a list of segments
-        # Each segment has: text, start_time, end_time attributes
+        # results is a list of ForcedAlignResult objects
+        # Each ForcedAlignResult has an 'items' attribute containing ForcedAlignItem objects
+        # Each ForcedAlignItem has: text, start_time, end_time attributes
         segments = []
         
         if isinstance(results, list) and len(results) > 0:
-            # results[0] contains the segments list
             first_result = results[0]
             
-            if isinstance(first_result, (list, tuple)):
-                # It's a list of segment objects
-                for seg in first_result:
-                    if hasattr(seg, "text"):
-                        segments.append({
-                            "text": seg.text,
-                            "start": seg.start_time,
-                            "end": seg.end_time,
-                        })
-            elif hasattr(first_result, "segments"):
-                # It has segments attribute
-                for seg in first_result.segments:
-                    if hasattr(seg, "text"):
-                        segments.append({
-                            "text": seg.text,
-                            "start": seg.start_time,
-                            "end": seg.end_time,
-                        })
-        elif hasattr(results, "segments"):
-            segments = results.segments
+            # Access the items attribute of ForcedAlignResult
+            items = getattr(first_result, 'items', [])
+            
+            for item in items:
+                if hasattr(item, "text"):
+                    segments.append({
+                        "text": item.text,
+                        "start": item.start_time,
+                        "end": item.end_time,
+                    })
         
         return segments
     
