@@ -166,11 +166,6 @@ class VideoProcessor:
         # Pad audio with delay at start and padding at end to match video duration
         delayed_audio = audio_path.parent / f"delayed_{audio_path.name}"
         
-        # Calculate padding needed after delay
-        # Audio needs: delay silence at start + original audio + padding at end
-        audio_info = self.get_audio_info(audio_path)
-        audio_duration = audio_info.duration
-        
         # Build filter: add delay at start, then pad to match video duration
         # adelay adds delay in milliseconds
         delay_ms = int(audio_delay * 1000)
