@@ -41,8 +41,13 @@ pydantic-settings>=2.1.0
 # HuggingFace
 huggingface-hub>=0.20.0
 
-# Optional: FlashAttention for better performance
-# flash-attn>=2.4.0 --no-build-isolation
+# Optional: FlashAttention 2 for better GPU performance
+# Install separately (do not add pip flags inline in requirements):
+#   pip install --no-build-isolation flash-attn
+# If no wheel exists for your Python version (common on Python 3.13),
+# create a Python 3.12 env and install there.
+# To disable warning without installing flash-attn:
+#   FLASH_ATTENTION=false
 
 # Optional: For translation
 # translate>=3.5.0
