@@ -269,6 +269,16 @@ def translate_video(
         "--tts-model",
         help="TTS model size (0.6B or 1.7B)",
     ),
+    max_segment_duration: Optional[float] = typer.Option(
+        None,
+        "--max-segment-duration",
+        help="Maximum segment duration in seconds (higher is faster, but less precise timing)",
+    ),
+    max_translation_retries: Optional[int] = typer.Option(
+        None,
+        "--max-translation-retries",
+        help="Retries to refit TTS duration per segment (lower is faster)",
+    ),
 ) -> None:
     """Full video translation pipeline."""
     config = Config()
@@ -285,12 +295,18 @@ def translate_video(
         config.qwen_tts_model = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 
     config.use_vad = not disable_vad
+    if max_segment_duration is not None:
+        config.max_segment_duration = max(1.0, float(max_segment_duration))
+    if max_translation_retries is not None:
+        config.max_translation_retries = max(0, int(max_translation_retries))
     
     set_config(config)
     
     console.print(f"🎬 Translating video: [bold]{input_path.name}[/bold]")
     console.print(f"📍 Target language: [bold]{target_language}[/bold]")
     console.print(f"🧠 VAD segmentation: [bold]{'on' if config.use_vad else 'off'}[/bold]")
+    console.print(f"⏱️ Max segment duration: [bold]{config.max_segment_duration:.1f}s[/bold]")
+    console.print(f"🔁 Max TTS fit retries: [bold]{config.max_translation_retries}[/bold]")
     
     try:
         translator = VideoTranslator(config=config)

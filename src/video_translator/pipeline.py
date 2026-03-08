@@ -191,6 +191,10 @@ class VideoTranslator:
         self._subtitle_generator: Optional[SubtitleGenerator] = None
         self._vad: Optional[SileroVAD] = None
         self._segment_qa: Optional[SegmentQA] = None
+        self._translation_model = None
+        self._translation_model_device = "cpu"
+        self._translation_tokenizers: Dict[str, Any] = {}
+        self._translation_model_name = "facebook/nllb-200-distilled-600M"
         
         logger.info("VideoTranslator initialized")
         logger.info(f"ASR Model: {self.asr_model_name}")
@@ -458,34 +462,31 @@ class VideoTranslator:
         Returns:
             Translated text.
         """
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        import torch
 
         source_code = get_nllb_code(source_language, default="eng_Latn")
         target_code = get_nllb_code(target_language, default="eng_Latn")
         if source_code == target_code:
             return text
-        
-        logger.info(f"Loading NLLB translation model...")
-        model_name = "facebook/nllb-200-distilled-600M"
-        
+
         try:
-            # Initialize tokenizer with source language
-            tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_code)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-            
+            model, tokenizer, device = self._get_translation_backend(source_code)
+
             # Check if text needs chunking
-            inputs = tokenizer(text, return_tensors="pt", padding=True)
-            input_length = inputs['input_ids'].shape[1]
-            
+            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
+            input_length = inputs["input_ids"].shape[1]
+            target_token_id = tokenizer.convert_tokens_to_ids(target_code)
+
             if input_length <= max_tokens:
                 # Translate as single chunk
                 logger.info(f"Translating {input_length} tokens (single chunk)")
-                target_token_id = tokenizer.convert_tokens_to_ids(target_code)
-                outputs = model.generate(
-                    **inputs,
-                    forced_bos_token_id=target_token_id,
-                    max_length=512,
-                )
+                device_inputs = {k: v.to(device) for k, v in inputs.items()}
+                with torch.inference_mode():
+                    outputs = model.generate(
+                        **device_inputs,
+                        forced_bos_token_id=target_token_id,
+                        max_length=512,
+                    )
                 translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 logger.info(f"Translation: '{text[:50]}...' -> '{translated[:50]}...'")
                 return translated
@@ -493,7 +494,7 @@ class VideoTranslator:
                 # Split into chunks and translate each
                 logger.info(f"Translating {input_length} tokens (chunked, max {max_tokens} per chunk)")
                 return self._translate_chunked(
-                    text, tokenizer, model, source_code, target_code, max_tokens
+                    text, tokenizer, model, source_code, target_code, device, max_tokens
                 )
         except Exception as e:
             logger.error(f"Translation error: {e}")
@@ -507,6 +508,7 @@ class VideoTranslator:
         model,
         source_code: str,
         target_code: str,
+        device: str,
         max_tokens: int = 800,
     ) -> str:
         """Translate long text by splitting into chunks.
@@ -522,6 +524,8 @@ class VideoTranslator:
         Returns:
             Translated text.
         """
+        import torch
+
         # Split text into sentences for better chunking
         import re
         sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -555,11 +559,13 @@ class VideoTranslator:
             logger.info(f"Translating chunk {i+1}/{len(chunks)} ({len(tokenizer.encode(chunk, add_special_tokens=False))} tokens)")
             
             inputs = tokenizer(chunk, return_tensors="pt", padding=True)
-            outputs = model.generate(
-                **inputs,
-                forced_bos_token_id=target_token_id,
-                max_length=512,
-            )
+            device_inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.inference_mode():
+                outputs = model.generate(
+                    **device_inputs,
+                    forced_bos_token_id=target_token_id,
+                    max_length=512,
+                )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
             translated_chunks.append(translated)
             logger.info(f"Chunk {i+1}: '{chunk[:30]}...' -> '{translated[:30]}...'")
@@ -590,7 +596,7 @@ class VideoTranslator:
         Returns:
             Dictionary with 'full_text' and 'segments' (translated with timing).
         """
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        import torch
 
         source_code = get_nllb_code(source_language, default="eng_Latn")
         target_code = get_nllb_code(target_language, default="eng_Latn")
@@ -599,11 +605,7 @@ class VideoTranslator:
                 "full_text": " ".join(ts.get("text", "") for ts in timestamps).strip(),
                 "segments": timestamps,
             }
-        model_name = "facebook/nllb-200-distilled-600M"
-        
-        logger.info(f"Loading NLLB translation model for chunked translation...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_code)
-        model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+        model, tokenizer, device = self._get_translation_backend(source_code)
         target_token_id = tokenizer.convert_tokens_to_ids(target_code)
         
         # Group timestamps into chunks
@@ -640,11 +642,13 @@ class VideoTranslator:
             
             # Translate
             inputs = tokenizer(chunk_text, return_tensors="pt", padding=True)
-            outputs = model.generate(
-                **inputs,
-                forced_bos_token_id=target_token_id,
-                max_length=512,
-            )
+            device_inputs = {k: v.to(device) for k, v in inputs.items()}
+            with torch.inference_mode():
+                outputs = model.generate(
+                    **device_inputs,
+                    forced_bos_token_id=target_token_id,
+                    max_length=512,
+                )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
             full_translations.append(translated)
             
@@ -688,6 +692,87 @@ class VideoTranslator:
             'full_text': full_text,
             'segments': translated_segments,
         }
+
+    def _get_translation_backend(self, source_code: str):
+        """Load and cache the NLLB model/tokenizer once per pipeline run."""
+        import torch
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+        def _resolve_device() -> str:
+            configured = (self.config.device or "auto").lower()
+            if configured == "cuda":
+                return "cuda" if torch.cuda.is_available() else "cpu"
+            if configured == "mps":
+                mps_ok = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+                return "mps" if mps_ok else "cpu"
+            if configured == "cpu":
+                return "cpu"
+            if torch.cuda.is_available():
+                return "cuda"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
+
+        cache_dir = str(self.config.model_cache_dir) if self.config.model_cache_dir else None
+
+        if self._translation_model is None:
+            device = _resolve_device()
+            logger.info("Loading NLLB translation model on %s...", device)
+
+            load_kwargs: Dict[str, Any] = {}
+            if cache_dir:
+                load_kwargs["cache_dir"] = cache_dir
+
+            if device == "cuda":
+                precision = (self.config.precision or "fp16").lower()
+                if precision == "bf16":
+                    load_kwargs["torch_dtype"] = torch.bfloat16
+                elif precision == "fp32":
+                    load_kwargs["torch_dtype"] = torch.float32
+                else:
+                    load_kwargs["torch_dtype"] = torch.float16
+
+            try:
+                self._translation_model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self._translation_model_name,
+                    **load_kwargs,
+                )
+                self._translation_model = self._translation_model.to(device)
+                self._translation_model.eval()
+                self._translation_model_device = device
+            except Exception as exc:
+                if device == "cpu":
+                    raise
+                logger.warning(
+                    "NLLB load on %s failed (%s). Falling back to CPU.",
+                    device,
+                    exc,
+                )
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                load_kwargs.pop("torch_dtype", None)
+                self._translation_model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self._translation_model_name,
+                    **load_kwargs,
+                )
+                self._translation_model = self._translation_model.to("cpu")
+                self._translation_model.eval()
+                self._translation_model_device = "cpu"
+
+        if source_code not in self._translation_tokenizers:
+            tokenizer_kwargs: Dict[str, Any] = {"src_lang": source_code}
+            if cache_dir:
+                tokenizer_kwargs["cache_dir"] = cache_dir
+            self._translation_tokenizers[source_code] = AutoTokenizer.from_pretrained(
+                self._translation_model_name,
+                **tokenizer_kwargs,
+            )
+
+        return (
+            self._translation_model,
+            self._translation_tokenizers[source_code],
+            self._translation_model_device,
+        )
     
     def translate_video(
         self,

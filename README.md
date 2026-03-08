@@ -6,9 +6,11 @@ An open-source video translation pipeline using **Qwen3** family models (ASR, TT
 
 - 🎙️ **Speech-to-Text** - Qwen3-ASR with 52 language support
 - 🔍 **VAD Segmentation** - Silero VAD for speech-bounded long-form processing
+- 🛟 **Robust Segmentation Fallback** - if VAD output is unusable, the pipeline falls back to fixed timeline chunks
 - 📝 **Forced Alignment** - Word-level timestamps with Qwen3-ForcedAligner
 - 🗣️ **Text-to-Speech** - Qwen3-TTS with voice cloning and design
 - ⏱️ **Duration Control** - Segment-level timing fit with mild retiming
+- ⚡ **Cached Translation Backend** - NLLB model/tokenizer are loaded once and reused across segments
 - 🔄 **Full Pipeline** - Video → VAD → ASR → Translation → TTS → QA → Output
 - 📹 **FFmpeg Integration** - Audio extraction and video muxing
 - 💻 **CLI & API** - Command-line and REST API interfaces
@@ -59,12 +61,31 @@ python -m video_translator.cli translate-video \
     es \
     --output ./output
 
-# 4) Optional: disable VAD and run as a single full-audio segment
+# 4) Optional: disable VAD and use fixed timeline chunks
 python -m video_translator.cli translate-video \
     video.mp4 \
     es \
     --output ./output \
     --disable-vad
+
+# 5) Speed-focused run (fewer, larger segments + no TTS fit retries)
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --max-segment-duration 45 \
+    --max-translation-retries 0
+
+# 6) Maximum speed preset (lower quality/fidelity)
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --max-segment-duration 60 \
+    --max-translation-retries 0 \
+    --no-voice-clone \
+    --asr-model 0.6B \
+    --tts-model 0.6B
 ```
 
 ## Project Structure
@@ -109,7 +130,22 @@ FLASH_ATTENTION=true
 # Storage
 MODEL_CACHE_DIR=./models_cache
 OUTPUT_DIR=./output
+
+# Segmentation/Timing Controls
+MAX_SEGMENT_DURATION=30.0
+MIN_SEGMENT_DURATION=0.4
+MAX_TRANSLATION_RETRIES=2
 ```
+
+## CLI Speed Tuning
+
+Useful `translate-video` options for performance tuning:
+
+- `--max-segment-duration FLOAT`: larger chunks reduce per-segment overhead (faster, less precise timing)
+- `--max-translation-retries INT`: retry count for duration fitting (set `0` for speed)
+- `--disable-vad`: skip speech-only detection and chunk the full timeline
+- `--no-voice-clone`: much faster than per-segment voice cloning
+- `--asr-model 0.6B` / `--tts-model 0.6B`: smaller models, lower latency
 
 ## API Reference
 
