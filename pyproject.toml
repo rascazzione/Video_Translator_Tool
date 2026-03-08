@@ -39,7 +39,7 @@ classifiers = [
 dependencies = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
-    "transformers>=4.51.0",
+    "transformers==4.57.3",
     "accelerate>=0.25.0",
     "librosa>=0.10.0",
     "soundfile>=0.12.0",
@@ -58,8 +58,8 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "huggingface-hub>=0.20.0",
-    "qwen-asr>=0.0.6",
-    "qwen-tts>=0.0.6",
+    "qwen-asr==0.0.5",
+    "qwen-tts==0.1.1",
     "silero-vad>=5.1.2",
 ]
 
