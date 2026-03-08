@@ -125,7 +125,7 @@ class QwenForcedAligner:
         
         # Prepare model kwargs
         model_kwargs = {
-            "torch_dtype": self.precision,
+            "dtype": self.precision,
             "low_cpu_mem_usage": True,
         }
         

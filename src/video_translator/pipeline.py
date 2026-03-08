@@ -139,6 +139,20 @@ class SegmentTranslationResult:
     actual_duration: float
 
 
+@dataclass
+class PreparedSegment:
+    """Intermediate segment data with token estimate for translation progress."""
+
+    segment_id: int
+    start: float
+    end: float
+    target_duration: float
+    audio_path: Path
+    source_text: str
+    source_language: str
+    token_count: int
+
+
 class VideoTranslator:
     """Main class for video translation pipeline.
     
@@ -195,6 +209,8 @@ class VideoTranslator:
         self._translation_model_device = "cpu"
         self._translation_tokenizers: Dict[str, Any] = {}
         self._translation_model_name = "facebook/nllb-200-distilled-600M"
+        self._translation_total_tokens = 0
+        self._translation_processed_tokens = 0
         
         logger.info("VideoTranslator initialized")
         logger.info(f"ASR Model: {self.asr_model_name}")
@@ -574,6 +590,60 @@ class VideoTranslator:
         combined = ' '.join(translated_chunks)
         logger.info(f"Combined translation length: {len(combined)} characters")
         return combined
+
+    def _reset_translation_progress(self, total_tokens: int) -> None:
+        """Initialize translation token progress counters."""
+        self._translation_total_tokens = max(0, int(total_tokens))
+        self._translation_processed_tokens = 0
+
+    def _advance_translation_progress(self, processed_tokens: int) -> None:
+        """Advance token progress and emit an updated progress log line."""
+        self._translation_processed_tokens += max(0, int(processed_tokens))
+        if self._translation_total_tokens > 0:
+            self._translation_processed_tokens = min(
+                self._translation_processed_tokens,
+                self._translation_total_tokens,
+            )
+        self._log_translation_progress()
+
+    def _log_translation_progress(self) -> None:
+        """Log processed/total translation tokens with percentage."""
+        if self._translation_total_tokens <= 0:
+            logger.info("Translation token progress: 0/0 (0.0%%)")
+            return
+
+        percentage = (
+            100.0 * self._translation_processed_tokens / self._translation_total_tokens
+        )
+        logger.info(
+            "Translation token progress: %d/%d (%.1f%%)",
+            self._translation_processed_tokens,
+            self._translation_total_tokens,
+            percentage,
+        )
+
+    def _count_translation_tokens(
+        self,
+        text: str,
+        source_language: str,
+        target_language: str,
+    ) -> int:
+        """Count source translation tokens for progress tracking."""
+        source_code = get_nllb_code(source_language, default="eng_Latn")
+        target_code = get_nllb_code(target_language, default="eng_Latn")
+        if source_code == target_code:
+            return 0
+
+        clean = (text or "").strip()
+        if not clean:
+            return 0
+
+        try:
+            _, tokenizer, _ = self._get_translation_backend(source_code)
+            token_count = len(tokenizer.encode(clean, add_special_tokens=False))
+            return max(1, token_count)
+        except Exception:
+            return max(1, len(clean.split()))
     
     def translate_text_with_timestamps(
         self,
@@ -726,11 +796,11 @@ class VideoTranslator:
             if device == "cuda":
                 precision = (self.config.precision or "fp16").lower()
                 if precision == "bf16":
-                    load_kwargs["torch_dtype"] = torch.bfloat16
+                    load_kwargs["dtype"] = torch.bfloat16
                 elif precision == "fp32":
-                    load_kwargs["torch_dtype"] = torch.float32
+                    load_kwargs["dtype"] = torch.float32
                 else:
-                    load_kwargs["torch_dtype"] = torch.float16
+                    load_kwargs["dtype"] = torch.float16
 
             try:
                 self._translation_model = AutoModelForSeq2SeqLM.from_pretrained(
@@ -750,7 +820,7 @@ class VideoTranslator:
                 )
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
-                load_kwargs.pop("torch_dtype", None)
+                load_kwargs.pop("dtype", None)
                 self._translation_model = AutoModelForSeq2SeqLM.from_pretrained(
                     self._translation_model_name,
                     **load_kwargs,
@@ -831,6 +901,7 @@ class VideoTranslator:
 
             logger.info("=" * 50)
             logger.info("Step 3: Per-segment ASR -> translation -> TTS")
+            prepared_segments: List[PreparedSegment] = []
             segment_results: List[SegmentTranslationResult] = []
             detected_source_language = "auto"
 
@@ -859,52 +930,83 @@ class VideoTranslator:
                     continue
 
                 detected_source_language = asr_result.language or detected_source_language
+                source_language = asr_result.language or detected_source_language
 
                 # Alignment is best-effort in this flow; translation proceeds regardless.
                 try:
                     self.aligner.align(
                         segment_audio_path,
                         source_text,
-                        language=get_language_name(detected_source_language),
+                        language=get_language_name(source_language),
                     )
                 except Exception as exc:
                     logger.debug("Alignment skipped for segment %d: %s", idx, exc)
 
-                translated_text = self.translate_text(
+                token_count = self._count_translation_tokens(
                     text=source_text,
-                    source_language=detected_source_language,
+                    source_language=source_language,
+                    target_language=target_language,
+                )
+                prepared_segments.append(
+                    PreparedSegment(
+                        segment_id=idx,
+                        start=region.start,
+                        end=region.end,
+                        target_duration=target_duration,
+                        audio_path=segment_audio_path,
+                        source_text=source_text,
+                        source_language=source_language,
+                        token_count=token_count,
+                    )
+                )
+
+            if not prepared_segments:
+                raise RuntimeError("No translated speech segments were generated")
+
+            total_tokens = sum(segment.token_count for segment in prepared_segments)
+            self._reset_translation_progress(total_tokens=total_tokens)
+            if self._translation_total_tokens > 0:
+                logger.info(
+                    "Translation token budget: %d total tokens across %d segments",
+                    self._translation_total_tokens,
+                    len(prepared_segments),
+                )
+            self._log_translation_progress()
+
+            for segment in prepared_segments:
+                translated_text = self.translate_text(
+                    text=segment.source_text,
+                    source_language=segment.source_language,
                     target_language=target_language,
                 )
                 fitted_text = self._fit_translation_to_duration(
-                    translated_text, target_duration=target_duration
+                    translated_text, target_duration=segment.target_duration
                 )
 
                 final_audio_path, actual_duration, final_text = self._synthesize_segment_with_fit(
-                    segment_id=idx,
+                    segment_id=segment.segment_id,
                     text=fitted_text,
                     language=target_language_name,
-                    target_duration=target_duration,
+                    target_duration=segment.target_duration,
                     output_dir=temp_path,
                     voice_clone=voice_clone,
-                    reference_audio=segment_audio_path if voice_clone else None,
-                    reference_text=source_text if voice_clone else None,
+                    reference_audio=segment.audio_path if voice_clone else None,
+                    reference_text=segment.source_text if voice_clone else None,
                     speaker=speaker,
                 )
 
                 segment_results.append(
                     SegmentTranslationResult(
-                        segment_id=idx,
-                        start=region.start,
-                        end=region.end,
-                        source_text=source_text,
+                        segment_id=segment.segment_id,
+                        start=segment.start,
+                        end=segment.end,
+                        source_text=segment.source_text,
                         translated_text=final_text,
                         audio_path=final_audio_path,
                         actual_duration=actual_duration,
                     )
                 )
-
-            if not segment_results:
-                raise RuntimeError("No translated speech segments were generated")
+                self._advance_translation_progress(segment.token_count)
 
             logger.info("=" * 50)
             logger.info("Step 4: Timeline assembly and muxing")
