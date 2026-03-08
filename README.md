@@ -74,7 +74,8 @@ python -m video_translator.cli translate-video \
     es \
     --output ./output \
     --max-segment-duration 45 \
-    --max-translation-retries 0
+    --max-translation-retries 0 \
+    --segment-extract-workers 6
 
 # 6) Maximum speed preset (lower quality/fidelity)
 python -m video_translator.cli translate-video \
@@ -143,6 +144,7 @@ Useful `translate-video` options for performance tuning:
 
 - `--max-segment-duration FLOAT`: larger chunks reduce per-segment overhead (faster, less precise timing)
 - `--max-translation-retries INT`: retry count for duration fitting (set `0` for speed)
+- `--segment-extract-workers INT`: parallel CPU workers for FFmpeg segment extraction
 - `--disable-vad`: skip speech-only detection and chunk the full timeline
 - `--no-voice-clone`: much faster than per-segment voice cloning
 - `--asr-model 0.6B` / `--tts-model 0.6B`: smaller models, lower latency

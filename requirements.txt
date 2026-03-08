@@ -1,14 +1,15 @@
 # Core Dependencies
 torch>=2.0.0
 torchaudio>=2.0.0
-transformers
+# transformers - version to be determined based on qwen-asr/qwen-tts compatibility
+# Note: qwen-asr requires transformers==4.57.6, qwen-tts requires transformers==4.57.3
+# These packages are currently incompatible. Consider using separate virtual environments.
+transformers>=4.57.0
 accelerate>=0.25.0
-# qwen-asr - ASR package (requires transformers==4.57.6)
-# Note: qwen-tts is temporarily disabled due to transformers version conflict
-# See: https://github.com/QwenLM/Qwen3-TTS/issues/237
-# Uncomment when qwen-tts becomes compatible with transformers==4.57.6
-# qwen-tts
-silero-vad
+qwen-asr>=0.0.5
+qwen-tts>=0.1.1
+silero-vad>=5.1.2
+torchcodec>=0.1.0
 
 # Audio Processing
 librosa>=0.10.0

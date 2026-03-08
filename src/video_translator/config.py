@@ -174,6 +174,11 @@ class Config(BaseSettings):
         default=2,
         description="Number of translation compression retries on timing mismatch",
     )
+
+    segment_extract_workers: int = Field(
+        default=1,
+        description="Number of CPU workers for parallel FFmpeg segment extraction",
+    )
     
     # ==================== Paths ====================
     

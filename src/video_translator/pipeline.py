@@ -2,6 +2,7 @@
 
 import logging
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -905,21 +906,60 @@ class VideoTranslator:
             segment_results: List[SegmentTranslationResult] = []
             detected_source_language = "auto"
 
+            segment_jobs: List[tuple[int, SpeechRegion, float, Path]] = []
             for idx, region in enumerate(regions):
                 target_duration = max(0.0, region.end - region.start)
                 if target_duration < self.config.min_segment_duration:
                     continue
 
                 segment_audio_path = temp_path / f"segment_{idx:05d}.wav"
-                self.audio_processor.extract_segment(
-                    input_path=source_audio_path,
-                    output_path=segment_audio_path,
-                    start=region.start,
-                    end=region.end,
-                    sample_rate=self.config.audio_sample_rate,
-                    channels=self.config.audio_channels,
-                )
+                segment_jobs.append((idx, region, target_duration, segment_audio_path))
 
+            if not segment_jobs:
+                raise RuntimeError("No translated speech segments were generated")
+
+            extract_workers = max(1, int(getattr(self.config, "segment_extract_workers", 1)))
+            extract_workers = min(extract_workers, len(segment_jobs))
+
+            logger.info(
+                "Extracting %d segments with %d CPU worker(s)",
+                len(segment_jobs),
+                extract_workers,
+            )
+            if extract_workers == 1:
+                for _, region, _, segment_audio_path in segment_jobs:
+                    self.audio_processor.extract_segment(
+                        input_path=source_audio_path,
+                        output_path=segment_audio_path,
+                        start=region.start,
+                        end=region.end,
+                        sample_rate=self.config.audio_sample_rate,
+                        channels=self.config.audio_channels,
+                    )
+            else:
+                with ThreadPoolExecutor(max_workers=extract_workers) as executor:
+                    future_to_segment = {
+                        executor.submit(
+                            self.audio_processor.extract_segment,
+                            input_path=source_audio_path,
+                            output_path=segment_audio_path,
+                            start=region.start,
+                            end=region.end,
+                            sample_rate=self.config.audio_sample_rate,
+                            channels=self.config.audio_channels,
+                        ): (idx, segment_audio_path)
+                        for idx, region, _, segment_audio_path in segment_jobs
+                    }
+                    for future in as_completed(future_to_segment):
+                        idx, segment_audio_path = future_to_segment[future]
+                        try:
+                            future.result()
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f"Failed extracting segment {idx} ({segment_audio_path.name}): {exc}"
+                            ) from exc
+
+            for idx, region, target_duration, segment_audio_path in segment_jobs:
                 asr_result = self.asr.transcribe(
                     segment_audio_path,
                     sample_rate=self.config.audio_sample_rate,
