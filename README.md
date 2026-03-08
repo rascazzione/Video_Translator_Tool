@@ -126,6 +126,13 @@ python -m video_translator.cli translate-video \
     --output ./output \
     --embed-subtitles \
     --subtitle-mode both
+
+# 9) Force source language (avoid ASR auto-detection mistakes)
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --source-language hi
 ```
 
 ## Project Structure
@@ -199,6 +206,7 @@ Useful `translate-video` options for performance tuning:
 - `--asr-model 0.6B` / `--tts-model 0.6B`: smaller models, lower latency
 - `--keep-background`: retain original background audio in final mix
 - `--background-volume FLOAT`: background gain when mixing (0.0-1.0)
+- `--source-language TEXT`: force source language for ASR/translation (e.g., `en`, `es`, `hi`)
 - `--embed-subtitles`: burn subtitles into output video
 - `--subtitle-mode original|translated|both`: subtitle text mode
 - With `--embed-subtitles`, audio replacement + subtitle burn are done in one FFmpeg pass

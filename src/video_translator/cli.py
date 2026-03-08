@@ -246,6 +246,11 @@ def translate_video(
         ...,
         help="Target language code (e.g., 'es', 'fr', 'de')",
     ),
+    source_language: Optional[str] = typer.Option(
+        None,
+        "--source-language",
+        help="Force source language (e.g., 'en', 'es', 'hi', 'English', 'Hindi')",
+    ),
     output_dir: Path = typer.Option(
         None,
         "--output",
@@ -360,6 +365,8 @@ def translate_video(
     
     console.print(f"🎬 Translating video: [bold]{input_path.name}[/bold]")
     console.print(f"📍 Target language: [bold]{target_language}[/bold]")
+    if source_language:
+        console.print(f"🗣️ Source language (forced): [bold]{source_language}[/bold]")
     console.print(f"🧠 VAD segmentation: [bold]{'on' if config.use_vad else 'off'}[/bold]")
     console.print(f"⏱️ Max segment duration: [bold]{config.max_segment_duration:.1f}s[/bold]")
     console.print(f"🔁 Max TTS fit retries: [bold]{config.max_translation_retries}[/bold]")
@@ -380,6 +387,7 @@ def translate_video(
         result = translator.translate_video(
             input_path=input_path,
             target_language=target_language,
+            source_language=source_language,
             output_dir=output_dir,
             voice_clone=not no_voice_clone,
             generate_subtitles=not no_subtitles,

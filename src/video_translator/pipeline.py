@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 LANGUAGE_MAP = {
     "es": "Spanish",
     "en": "English",
+    "hi": "Hindi",
     "zh": "Chinese",
     "fr": "French",
     "de": "German",
@@ -42,6 +43,9 @@ NLLB_LANGUAGE_MAP = {
     "english": "eng_Latn",
     "en": "eng_Latn",
     "eng": "eng_Latn",
+    "hindi": "hin_Deva",
+    "hi": "hin_Deva",
+    "hin": "hin_Deva",
     "chinese": "zho_Hans",
     "zh": "zho_Hans",
     "zho": "zho_Hans",
@@ -861,6 +865,7 @@ class VideoTranslator:
         background_volume: Optional[float] = None,
         embed_subtitles: Optional[bool] = None,
         subtitle_mode: Optional[Literal["original", "translated", "both"]] = None,
+        source_language: Optional[str] = None,
     ) -> TranslationResult:
         """Full video translation pipeline.
         
@@ -875,6 +880,7 @@ class VideoTranslator:
             background_volume: Background mix gain in range [0.0, 1.0].
             embed_subtitles: Burn subtitles into final video.
             subtitle_mode: Subtitle text mode: original, translated, both.
+            source_language: Optional source language to force (code/name).
         
         Returns:
             TranslationResult with paths to all output files.
@@ -885,6 +891,9 @@ class VideoTranslator:
         
         output_dir = Path(output_dir) if output_dir else self.config.output_path
         output_dir.mkdir(parents=True, exist_ok=True)
+        forced_source_language = (source_language or "").strip()
+        if forced_source_language:
+            logger.info("Forcing source language: %s", forced_source_language)
         keep_background = (
             self.config.keep_background_audio
             if keep_background is None
@@ -939,7 +948,7 @@ class VideoTranslator:
             logger.info("Step 3: Per-segment ASR -> translation -> TTS")
             prepared_segments: List[PreparedSegment] = []
             segment_results: List[SegmentTranslationResult] = []
-            detected_source_language = "auto"
+            detected_source_language = forced_source_language or "auto"
             warned_unsupported_aligner_language = False
 
             segment_jobs: List[tuple[int, SpeechRegion, float, Path]] = []
@@ -1004,6 +1013,7 @@ class VideoTranslator:
                 asr_result = self.asr.transcribe(
                     segment_audio_path,
                     sample_rate=self.config.audio_sample_rate,
+                    language=forced_source_language or None,
                     return_timestamps=True,
                 )
                 source_text = (asr_result.text or "").strip()
@@ -1011,10 +1021,10 @@ class VideoTranslator:
                     continue
 
                 detected_source_language = asr_result.language or detected_source_language
-                source_language = asr_result.language or detected_source_language
+                segment_source_language = forced_source_language or asr_result.language or detected_source_language
 
                 # Alignment is best-effort in this flow; translation proceeds regardless.
-                align_language = get_language_name(source_language)
+                align_language = get_language_name(segment_source_language)
                 if align_language in self.aligner.SUPPORTED_LANGUAGES:
                     try:
                         self.aligner.align(
@@ -1033,7 +1043,7 @@ class VideoTranslator:
 
                 token_count = self._count_translation_tokens(
                     text=source_text,
-                    source_language=source_language,
+                    source_language=segment_source_language,
                     target_language=target_language,
                 )
                 prepared_segments.append(
@@ -1044,7 +1054,7 @@ class VideoTranslator:
                         target_duration=target_duration,
                         audio_path=segment_audio_path,
                         source_text=source_text,
-                        source_language=source_language,
+                        source_language=segment_source_language,
                         token_count=token_count,
                     )
                 )
@@ -1178,7 +1188,7 @@ class VideoTranslator:
                 audio_path=final_audio_path,
                 transcript_path=transcript_path,
                 subtitle_path=subtitle_path,
-                original_language=detected_source_language,
+                original_language=forced_source_language or detected_source_language,
                 target_language=target_language,
             )
 
