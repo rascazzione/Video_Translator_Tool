@@ -892,8 +892,15 @@ class VideoTranslator:
         output_dir = Path(output_dir) if output_dir else self.config.output_path
         output_dir.mkdir(parents=True, exist_ok=True)
         forced_source_language = (source_language or "").strip()
+        forced_source_language_asr = (
+            get_language_name(forced_source_language) if forced_source_language else ""
+        )
         if forced_source_language:
-            logger.info("Forcing source language: %s", forced_source_language)
+            logger.info(
+                "Forcing source language: %s (ASR hint: %s)",
+                forced_source_language,
+                forced_source_language_asr,
+            )
         keep_background = (
             self.config.keep_background_audio
             if keep_background is None
@@ -1010,12 +1017,29 @@ class VideoTranslator:
                             ) from exc
 
             for idx, region, target_duration, segment_audio_path in segment_jobs:
-                asr_result = self.asr.transcribe(
-                    segment_audio_path,
-                    sample_rate=self.config.audio_sample_rate,
-                    language=forced_source_language or None,
-                    return_timestamps=True,
-                )
+                try:
+                    asr_result = self.asr.transcribe(
+                        segment_audio_path,
+                        sample_rate=self.config.audio_sample_rate,
+                        language=forced_source_language_asr or None,
+                        return_timestamps=True,
+                    )
+                except ValueError as exc:
+                    if forced_source_language_asr:
+                        logger.warning(
+                            "Forced source language '%s' was rejected by ASR (%s); "
+                            "falling back to auto-detection.",
+                            forced_source_language_asr,
+                            exc,
+                        )
+                        asr_result = self.asr.transcribe(
+                            segment_audio_path,
+                            sample_rate=self.config.audio_sample_rate,
+                            language=None,
+                            return_timestamps=True,
+                        )
+                    else:
+                        raise
                 source_text = (asr_result.text or "").strip()
                 if not source_text:
                     continue
