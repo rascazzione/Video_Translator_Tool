@@ -883,8 +883,10 @@ class VideoTranslator:
         if total_duration <= 0:
             return []
 
+        fallback_regions = self._build_fixed_timeline_regions(total_duration)
+
         if not vad_regions:
-            return [SpeechRegion(start=0.0, end=total_duration, confidence=1.0)]
+            return fallback_regions
 
         ordered = sorted(vad_regions, key=lambda r: r.start)
         grouped: List[SpeechRegion] = []
@@ -938,11 +940,42 @@ class VideoTranslator:
                 )
                 start = end
 
-        return [
+        filtered = [
             region
             for region in split_regions
             if (region.end - region.start) >= self.config.min_segment_duration
         ]
+        if filtered:
+            return filtered
+
+        logger.warning(
+            "VAD produced %d regions but none met min_segment_duration=%.2fs; "
+            "falling back to fixed timeline chunks.",
+            len(vad_regions),
+            self.config.min_segment_duration,
+        )
+        return fallback_regions
+
+    def _build_fixed_timeline_regions(self, total_duration: float) -> List[SpeechRegion]:
+        """Build fixed-size timeline chunks as a resilient fallback."""
+        if total_duration <= 0:
+            return []
+
+        max_len = max(
+            float(self.config.max_segment_duration),
+            float(self.config.min_segment_duration),
+            0.1,
+        )
+
+        regions: List[SpeechRegion] = []
+        start = 0.0
+        while start < total_duration:
+            end = min(total_duration, start + max_len)
+            if end > start:
+                regions.append(SpeechRegion(start=start, end=end, confidence=1.0))
+            start = end
+
+        return regions
 
     def _fit_translation_to_duration(
         self,
