@@ -1037,9 +1037,9 @@ class VideoTranslator:
                     source_language=segment.source_language,
                     target_language=target_language,
                 )
-                fitted_text = self._fit_translation_to_duration(
-                    translated_text, target_duration=segment.target_duration
-                )
+                # Keep full translation text by default; timing compression is only
+                # applied inside retry logic when explicitly needed.
+                fitted_text = translated_text
 
                 final_audio_path, actual_duration, final_text = self._synthesize_segment_with_fit(
                     segment_id=segment.segment_id,
