@@ -1098,7 +1098,7 @@ class VideoTranslator:
                 self._advance_translation_progress(segment.token_count)
 
             logger.info("=" * 50)
-            logger.info("Step 4: Timeline assembly and muxing")
+            logger.info("Step 4: Timeline assembly")
             final_audio_path = output_dir / f"{input_path.stem}_{target_language}.wav"
             speech_track_path = (
                 temp_path / f"{input_path.stem}_{target_language}_speech.wav"
@@ -1128,14 +1128,6 @@ class VideoTranslator:
                     channels=self.config.audio_channels,
                 )
 
-            video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
-            self.video_processor.replace_audio(
-                input_path,
-                final_audio_path,
-                video_path,
-                audio_delay=0.0,
-            )
-
             logger.info("=" * 50)
             logger.info("Step 5: Writing transcript, subtitles, and QA report")
             translated_text = " ".join(seg.translated_text for seg in segment_results).strip()
@@ -1154,14 +1146,27 @@ class VideoTranslator:
                     subtitle_segments, subtitle_path
                 )
 
+            logger.info("=" * 50)
+            logger.info("Step 6: Final video muxing")
+            video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
             if embed_subtitles and subtitle_path is not None:
+                # One FFmpeg pass: replace audio + burn subtitles.
                 burned_video_path = output_dir / f"{input_path.stem}_{target_language}_burned.mp4"
-                self.video_processor.burn_subtitles(
-                    video_path=video_path,
+                self.video_processor.replace_audio_and_burn_subtitles(
+                    video_path=input_path,
+                    audio_path=final_audio_path,
                     subtitle_path=subtitle_path,
                     output_path=burned_video_path,
+                    audio_delay=0.0,
                 )
                 video_path = burned_video_path
+            else:
+                self.video_processor.replace_audio(
+                    input_path,
+                    final_audio_path,
+                    video_path,
+                    audio_delay=0.0,
+                )
 
             self._write_segment_report(
                 output_path=output_dir / f"{input_path.stem}_{target_language}_segments.json",

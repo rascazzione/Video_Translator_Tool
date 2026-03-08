@@ -209,6 +209,87 @@ class VideoProcessor:
         
         return self.get_video_info(output_path)
 
+    def replace_audio_and_burn_subtitles(
+        self,
+        video_path: Path,
+        audio_path: Path,
+        subtitle_path: Path,
+        output_path: Path,
+        audio_codec: str = "aac",
+        audio_delay: float = 0.0,
+    ) -> VideoInfo:
+        """Replace audio and burn subtitles in a single FFmpeg pass.
+
+        This avoids doing two full video passes (replace audio first, burn later).
+        """
+        video_path = Path(video_path)
+        audio_path = Path(audio_path)
+        subtitle_path = Path(subtitle_path)
+        output_path = Path(output_path)
+
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+        if not subtitle_path.exists():
+            raise FileNotFoundError(f"Subtitle file not found: {subtitle_path}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Get video duration to pad audio if needed.
+        video_info = self.get_video_info(video_path)
+        video_duration = video_info.duration
+
+        logger.info("Replacing audio and burning subtitles in %s...", video_path.name)
+        logger.info("Video duration: %ss", video_duration)
+        logger.info("Audio delay: %ss", audio_delay)
+
+        # Pad audio with delay at start and padding at end to match video duration.
+        delayed_audio = audio_path.parent / f"delayed_{audio_path.name}"
+        delay_ms = int(audio_delay * 1000)
+        filter_cmd = f"adelay={delay_ms}|{delay_ms},apad=whole_dur={video_duration}"
+
+        pad_cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(audio_path),
+            "-af", filter_cmd,
+            str(delayed_audio),
+        ]
+
+        result = subprocess.run(pad_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logger.warning("Audio delay/padding failed: %s", result.stderr)
+            delayed_audio = audio_path
+
+        subtitle_filter_path = (
+            subtitle_path.resolve().as_posix().replace("\\", "/").replace(":", r"\:")
+        )
+        subtitle_filter_path = subtitle_filter_path.replace("'", r"\'")
+        subtitle_filter = f"subtitles='{subtitle_filter_path}'"
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(video_path),
+            "-i", str(delayed_audio),
+            "-vf", subtitle_filter,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-c:a", audio_codec,
+            "-map", "0",
+            "-map", "-0:a",
+            "-map", "1:a",
+            str(output_path),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg subtitle+audio mux failed: {result.stderr}")
+
+        return self.get_video_info(output_path)
+
     def burn_subtitles(
         self,
         video_path: Path,

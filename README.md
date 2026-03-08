@@ -201,6 +201,8 @@ Useful `translate-video` options for performance tuning:
 - `--background-volume FLOAT`: background gain when mixing (0.0-1.0)
 - `--embed-subtitles`: burn subtitles into output video
 - `--subtitle-mode original|translated|both`: subtitle text mode
+- With `--embed-subtitles`, audio replacement + subtitle burn are done in one FFmpeg pass
+- `--notify-complete/--no-notify-complete`: terminal bell when the full translation finishes
 
 ## Runtime Notes
 

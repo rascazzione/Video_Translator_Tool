@@ -2,6 +2,8 @@
 
 import logging
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +31,18 @@ app = typer.Typer(
     help="Video translation pipeline using Qwen3 models",
     add_completion=False,
 )
+
+
+def _notify_completion() -> None:
+    """Emit a terminal bell to signal long-running completion."""
+    try:
+        console.bell()
+    except Exception:
+        try:
+            sys.stdout.write("\a")
+            sys.stdout.flush()
+        except Exception:
+            pass
 
 
 def version_callback(value: bool) -> None:
@@ -304,6 +318,11 @@ def translate_video(
         "--subtitle-mode",
         help="Subtitle mode: original, translated, both",
     ),
+    notify_complete: bool = typer.Option(
+        True,
+        "--notify-complete/--no-notify-complete",
+        help="Emit terminal bell when full translation is finished",
+    ),
 ) -> None:
     """Full video translation pipeline."""
     config = Config()
@@ -353,6 +372,8 @@ def translate_video(
     if config.embed_subtitles or (not no_subtitles):
         console.print(f"📝 Subtitle mode: [bold]{config.subtitle_mode}[/bold]")
     
+    started_perf = time.perf_counter()
+
     try:
         translator = VideoTranslator(config=config)
         
@@ -378,6 +399,14 @@ def translate_video(
             console.print(f"📹 Subtitles: {result.subtitle_path}")
         
         console.print(f"\n📊 Languages: {result.original_language} → {result.target_language}")
+        elapsed_seconds = time.perf_counter() - started_perf
+        finished_at = datetime.now()
+        console.print(
+            f"⏱️ Completed at: {finished_at.strftime('%Y-%m-%d %H:%M:%S')} "
+            f"(elapsed {elapsed_seconds:.1f}s)"
+        )
+        if notify_complete:
+            _notify_completion()
         
     except Exception as e:
         console.print(f"\n[red]✗ Error: {e}[/red]")
