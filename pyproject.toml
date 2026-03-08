@@ -58,7 +58,6 @@ dependencies = [
     "pydantic>=2.5.0",
     "pydantic-settings>=2.1.0",
     "huggingface-hub>=0.20.0",
-    "qwen-asr==0.0.5",
     "qwen-tts==0.1.1",
     "silero-vad>=5.1.2",
 ]
@@ -81,6 +80,11 @@ translation = [
 all = [
     "video-translator[dev,flash-attn,translation]",
 ]
+# NOTE:
+# qwen-asr is intentionally not listed in core dependencies because current
+# qwen-asr/qwen-tts releases pin incompatible transformers versions.
+# Install manually after base install:
+#   pip install --no-deps qwen-asr==0.0.6
 
 [project.scripts]
 video-translator = "video_translator.cli:app"
