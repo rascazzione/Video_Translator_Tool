@@ -1,6 +1,7 @@
 """Main video translation pipeline orchestrator."""
 
 import logging
+import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -918,7 +919,12 @@ class VideoTranslator:
             if not segment_jobs:
                 raise RuntimeError("No translated speech segments were generated")
 
-            extract_workers = max(1, int(getattr(self.config, "segment_extract_workers", 1)))
+            configured_workers = int(getattr(self.config, "segment_extract_workers", 0))
+            if configured_workers <= 0:
+                cpu_count = os.cpu_count() or 1
+                extract_workers = min(8, max(1, cpu_count - 1))
+            else:
+                extract_workers = max(1, configured_workers)
             extract_workers = min(extract_workers, len(segment_jobs))
 
             logger.info(

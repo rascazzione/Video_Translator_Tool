@@ -176,8 +176,11 @@ class Config(BaseSettings):
     )
 
     segment_extract_workers: int = Field(
-        default=1,
-        description="Number of CPU workers for parallel FFmpeg segment extraction",
+        default=0,
+        description=(
+            "CPU workers for parallel FFmpeg segment extraction "
+            "(0 = auto)"
+        ),
     )
     
     # ==================== Paths ====================

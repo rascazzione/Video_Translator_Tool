@@ -282,7 +282,7 @@ def translate_video(
     segment_extract_workers: Optional[int] = typer.Option(
         None,
         "--segment-extract-workers",
-        help="CPU workers for parallel segment extraction with FFmpeg",
+        help="CPU workers for parallel segment extraction with FFmpeg (0 = auto)",
     ),
 ) -> None:
     """Full video translation pipeline."""
@@ -305,7 +305,7 @@ def translate_video(
     if max_translation_retries is not None:
         config.max_translation_retries = max(0, int(max_translation_retries))
     if segment_extract_workers is not None:
-        config.segment_extract_workers = max(1, int(segment_extract_workers))
+        config.segment_extract_workers = max(0, int(segment_extract_workers))
     
     set_config(config)
     
@@ -314,7 +314,8 @@ def translate_video(
     console.print(f"🧠 VAD segmentation: [bold]{'on' if config.use_vad else 'off'}[/bold]")
     console.print(f"⏱️ Max segment duration: [bold]{config.max_segment_duration:.1f}s[/bold]")
     console.print(f"🔁 Max TTS fit retries: [bold]{config.max_translation_retries}[/bold]")
-    console.print(f"🧵 Segment extract workers: [bold]{config.segment_extract_workers}[/bold]")
+    workers_label = "auto" if config.segment_extract_workers <= 0 else str(config.segment_extract_workers)
+    console.print(f"🧵 Segment extract workers: [bold]{workers_label}[/bold]")
     
     try:
         translator = VideoTranslator(config=config)
