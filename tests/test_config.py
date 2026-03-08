@@ -18,6 +18,7 @@ def test_default_config():
     assert config.device == "auto"
     assert config.precision == "bf16"
     assert config.flash_attention is True
+    assert config.use_vad is True
     assert config.api_port == 8000
 
 

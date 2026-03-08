@@ -1,11 +1,14 @@
 """Audio processing utilities using FFmpeg."""
 
+import math
 import logging
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +260,135 @@ class AudioProcessor:
         finally:
             import os
             os.unlink(list_file)
+
+    def extract_segment(
+        self,
+        input_path: Path,
+        output_path: Path,
+        start: float,
+        end: float,
+        sample_rate: Optional[int] = None,
+        channels: Optional[int] = None,
+    ) -> AudioInfo:
+        """Extract a time-bounded audio segment."""
+        input_path = Path(input_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if end <= start:
+            raise ValueError(f"Invalid segment bounds: start={start}, end={end}")
+
+        sample_rate = sample_rate or self.sample_rate
+        channels = channels or self.channels
+        duration = end - start
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-ss", f"{start:.3f}",
+            "-i", str(input_path),
+            "-t", f"{duration:.3f}",
+            "-acodec", "pcm_s16le",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            str(output_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg segment extraction failed: {result.stderr}")
+        return self.get_audio_info(output_path)
+
+    def time_stretch_to_duration(
+        self,
+        input_path: Path,
+        output_path: Path,
+        target_duration: float,
+        max_stretch_ratio: float = 1.2,
+    ) -> AudioInfo:
+        """Retimes audio to fit a target duration using mild time-stretch."""
+        input_path = Path(input_path)
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if target_duration <= 0:
+            raise ValueError("target_duration must be > 0")
+
+        info = self.get_audio_info(input_path)
+        if info.duration <= 0:
+            raise ValueError("Input audio has zero duration")
+
+        stretch_ratio = target_duration / info.duration
+        if stretch_ratio <= 0:
+            raise ValueError("Computed stretch ratio must be > 0")
+
+        # Keep retiming mild to avoid artifacts.
+        if stretch_ratio < 1 / max_stretch_ratio or stretch_ratio > max_stretch_ratio:
+            raise ValueError(
+                f"Stretch ratio {stretch_ratio:.3f} exceeds max {max_stretch_ratio:.3f}"
+            )
+
+        import librosa
+        import soundfile as sf
+
+        audio, sample_rate = librosa.load(str(input_path), sr=None, mono=True)
+        if audio.size == 0:
+            raise ValueError("Input audio is empty")
+
+        # librosa time_stretch rate > 1 speeds up (shorter), < 1 slows down.
+        rate = info.duration / target_duration
+        stretched = librosa.effects.time_stretch(audio, rate=rate)
+        sf.write(str(output_path), stretched, sample_rate)
+        return self.get_audio_info(output_path)
+
+    def assemble_timeline(
+        self,
+        segments: List[Dict[str, Any]],
+        output_path: Path,
+        total_duration: float,
+        sample_rate: Optional[int] = None,
+    ) -> AudioInfo:
+        """Assemble segment audio files into one timeline-aligned track."""
+        if total_duration <= 0:
+            raise ValueError("total_duration must be > 0")
+
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_rate = sample_rate or self.sample_rate
+
+        timeline_size = int(math.ceil(total_duration * sample_rate)) + 1
+        mix = np.zeros(timeline_size, dtype=np.float32)
+
+        import librosa
+        import soundfile as sf
+
+        for seg in segments:
+            seg_path = Path(seg["audio_path"])
+            if not seg_path.exists():
+                logger.warning("Skipping missing segment audio: %s", seg_path)
+                continue
+
+            start = max(0.0, float(seg.get("start", 0.0)))
+            start_idx = int(start * sample_rate)
+            if start_idx >= timeline_size:
+                continue
+
+            audio, sr = sf.read(str(seg_path), dtype="float32")
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+            if sr != sample_rate:
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=sample_rate)
+
+            end_idx = min(timeline_size, start_idx + len(audio))
+            if end_idx <= start_idx:
+                continue
+            mix[start_idx:end_idx] += audio[: end_idx - start_idx]
+
+        peak = float(np.max(np.abs(mix))) if mix.size else 0.0
+        if peak > 1.0:
+            mix = mix / peak
+
+        sf.write(str(output_path), mix, sample_rate)
+        return self.get_audio_info(output_path)
 
 
 def extract_audio(

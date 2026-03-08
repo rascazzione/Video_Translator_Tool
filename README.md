@@ -5,9 +5,11 @@ An open-source video translation pipeline using **Qwen3** family models (ASR, TT
 ## Features
 
 - 🎙️ **Speech-to-Text** - Qwen3-ASR with 52 language support
+- 🔍 **VAD Segmentation** - Silero VAD for speech-bounded long-form processing
 - 📝 **Forced Alignment** - Word-level timestamps with Qwen3-ForcedAligner
 - 🗣️ **Text-to-Speech** - Qwen3-TTS with voice cloning and design
-- 🔄 **Full Pipeline** - Video → Transcription → Translation → TTS → Output
+- ⏱️ **Duration Control** - Segment-level timing fit with mild retiming
+- 🔄 **Full Pipeline** - Video → VAD → ASR → Translation → TTS → QA → Output
 - 📹 **FFmpeg Integration** - Audio extraction and video muxing
 - 💻 **CLI & API** - Command-line and REST API interfaces
 
@@ -43,17 +45,26 @@ python scripts/download_models.py
 ### Basic Usage
 
 ```bash
-# Transcribe audio from video
-python -m video_translator.cli transcribe --input video.mp4 --output transcript.txt
+# You can also use `video-translator` instead of `python -m video_translator.cli`
 
-# Generate speech from text
-python -m video_translator.cli tts --input text.txt --output speech.wav
+# 1) Transcribe audio from a video (outputs transcript + optional .srt)
+python -m video_translator.cli transcribe video.mp4 --output ./output --language en
 
-# Full video translation pipeline
+# 2) Generate speech from a text file
+python -m video_translator.cli tts text.txt --output ./output/speech.wav --language English --speaker Aiden
+
+# 3) Full video translation pipeline (VAD-enabled segmented dubbing)
 python -m video_translator.cli translate-video \
-    --input video.mp4 \
-    --target-language es \
-    --output translated_video.mp4
+    video.mp4 \
+    es \
+    --output ./output
+
+# 4) Optional: disable VAD and run as a single full-audio segment
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --disable-vad
 ```
 
 ## Project Structure

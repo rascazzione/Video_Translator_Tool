@@ -130,9 +130,49 @@ class Config(BaseSettings):
         description="Maximum audio duration in seconds per segment",
     )
     
+    use_vad: bool = Field(
+        default=True,
+        description="Enable VAD-based segmentation before ASR",
+    )
+
     vad_threshold: float = Field(
         default=0.5,
         description="Voice Activity Detection threshold",
+    )
+
+    vad_min_speech_duration_ms: int = Field(
+        default=250,
+        description="Minimum speech region duration for VAD, in milliseconds",
+    )
+
+    vad_min_silence_duration_ms: int = Field(
+        default=200,
+        description="Minimum silence to split VAD regions, in milliseconds",
+    )
+
+    max_segment_duration: float = Field(
+        default=30.0,
+        description="Maximum segment duration (seconds) after VAD grouping",
+    )
+
+    min_segment_duration: float = Field(
+        default=0.4,
+        description="Minimum segment duration (seconds) to process",
+    )
+
+    duration_error_tolerance: float = Field(
+        default=0.15,
+        description="Acceptable synthesized duration error ratio",
+    )
+
+    max_retiming_ratio: float = Field(
+        default=1.2,
+        description="Maximum mild retiming ratio for TTS outputs",
+    )
+
+    max_translation_retries: int = Field(
+        default=2,
+        description="Number of translation compression retries on timing mismatch",
     )
     
     # ==================== Paths ====================
@@ -154,7 +194,14 @@ class Config(BaseSettings):
     
     def ensure_directories(self) -> None:
         """Ensure all required directories exist."""
-        for path in [self.model_cache_path, self.output_path, self.temp_path]:
+        for path in [
+            self.model_cache_path,
+            self.output_path,
+            self.temp_path,
+            self.audio_output_path,
+            self.video_output_path,
+            self.subtitle_output_path,
+        ]:
             path.mkdir(parents=True, exist_ok=True)
     
     # Subdirectories

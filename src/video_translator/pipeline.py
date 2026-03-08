@@ -4,15 +4,17 @@ import logging
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import Config, get_config
-from .models.asr import QwenASR, ASRResult
+from .models.asr import QwenASR
 from .models.tts import QwenTTS, TTSResult
 from .models.aligner import QwenForcedAligner, AlignmentResult
-from .processing.audio import AudioProcessor, extract_audio
-from .processing.video import VideoProcessor, mux_audio_video
-from .processing.subtitles import SubtitleGenerator, generate_srt
+from .processing.audio import AudioProcessor
+from .processing.video import VideoProcessor
+from .processing.subtitles import SubtitleGenerator
+from .processing.vad import SileroVAD, SpeechRegion
+from .processing.qa import SegmentQA
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,40 @@ LANGUAGE_MAP = {
     "ru": "Russian",
 }
 
+# Language code mapping for NLLB translation model (BCP-47 codes).
+NLLB_LANGUAGE_MAP = {
+    "spanish": "spa_Latn",
+    "es": "spa_Latn",
+    "spa": "spa_Latn",
+    "english": "eng_Latn",
+    "en": "eng_Latn",
+    "eng": "eng_Latn",
+    "chinese": "zho_Hans",
+    "zh": "zho_Hans",
+    "zho": "zho_Hans",
+    "french": "fra_Latn",
+    "fr": "fra_Latn",
+    "fra": "fra_Latn",
+    "german": "deu_Latn",
+    "de": "deu_Latn",
+    "deu": "deu_Latn",
+    "italian": "ita_Latn",
+    "it": "ita_Latn",
+    "ita": "ita_Latn",
+    "japanese": "jpn_Jpan",
+    "ja": "jpn_Jpan",
+    "jpn": "jpn_Jpan",
+    "korean": "kor_Hang",
+    "ko": "kor_Hang",
+    "kor": "kor_Hang",
+    "portuguese": "por_Latn",
+    "pt": "por_Latn",
+    "por": "por_Latn",
+    "russian": "rus_Cyrl",
+    "ru": "rus_Cyrl",
+    "rus": "rus_Cyrl",
+}
+
 
 def get_language_name(code: str) -> str:
     """Convert language code to full language name for TTS."""
@@ -38,6 +74,13 @@ def get_language_name(code: str) -> str:
         if code.lower() == full_name.lower():
             return full_name
     return LANGUAGE_MAP.get(code.lower(), code)
+
+
+def get_nllb_code(language: str, default: str = "eng_Latn") -> str:
+    """Resolve human/code language input to an NLLB language code."""
+    if not language:
+        return default
+    return NLLB_LANGUAGE_MAP.get(language.lower(), default)
 
 
 @dataclass
@@ -81,6 +124,19 @@ class TranslationResult:
     
     target_language: str = ""
     """Target translation language."""
+
+
+@dataclass
+class SegmentTranslationResult:
+    """Per-segment translation and synthesis output."""
+
+    segment_id: int
+    start: float
+    end: float
+    source_text: str
+    translated_text: str
+    audio_path: Path
+    actual_duration: float
 
 
 class VideoTranslator:
@@ -133,6 +189,8 @@ class VideoTranslator:
         self._audio_processor: Optional[AudioProcessor] = None
         self._video_processor: Optional[VideoProcessor] = None
         self._subtitle_generator: Optional[SubtitleGenerator] = None
+        self._vad: Optional[SileroVAD] = None
+        self._segment_qa: Optional[SegmentQA] = None
         
         logger.info("VideoTranslator initialized")
         logger.info(f"ASR Model: {self.asr_model_name}")
@@ -202,6 +260,27 @@ class VideoTranslator:
         if self._subtitle_generator is None:
             self._subtitle_generator = SubtitleGenerator()
         return self._subtitle_generator
+
+    @property
+    def vad(self) -> SileroVAD:
+        """Get or create VAD component."""
+        if self._vad is None:
+            self._vad = SileroVAD(
+                threshold=self.config.vad_threshold,
+                sampling_rate=self.config.audio_sample_rate,
+                min_speech_duration_ms=self.config.vad_min_speech_duration_ms,
+                min_silence_duration_ms=self.config.vad_min_silence_duration_ms,
+            )
+        return self._vad
+
+    @property
+    def segment_qa(self) -> SegmentQA:
+        """Get or create segment QA validator."""
+        if self._segment_qa is None:
+            self._segment_qa = SegmentQA(
+                max_duration_error_ratio=self.config.duration_error_tolerance
+            )
+        return self._segment_qa
     
     def transcribe(
         self,
@@ -380,23 +459,11 @@ class VideoTranslator:
             Translated text.
         """
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-        
-        # Language code mapping for NLLB (BCP-47 codes)
-        NLLB_LANGUAGE_MAP = {
-            "spanish": "spa_Latn",
-            "english": "eng_Latn",
-            "chinese": "zho_Hans",
-            "french": "fra_Latn",
-            "german": "deu_Latn",
-            "italian": "ita_Latn",
-            "japanese": "jpn_Jpan",
-            "korean": "kor_Hang",
-            "portuguese": "por_Latn",
-            "russian": "rus_Cyrl",
-        }
-        
-        source_code = NLLB_LANGUAGE_MAP.get(source_language.lower(), "spa_Latn")
-        target_code = NLLB_LANGUAGE_MAP.get(target_language.lower(), "eng_Latn")
+
+        source_code = get_nllb_code(source_language, default="eng_Latn")
+        target_code = get_nllb_code(target_language, default="eng_Latn")
+        if source_code == target_code:
+            return text
         
         logger.info(f"Loading NLLB translation model...")
         model_name = "facebook/nllb-200-distilled-600M"
@@ -524,23 +591,14 @@ class VideoTranslator:
             Dictionary with 'full_text' and 'segments' (translated with timing).
         """
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-        import re
-        
-        NLLB_LANGUAGE_MAP = {
-            "spanish": "spa_Latn",
-            "english": "eng_Latn",
-            "chinese": "zho_Hans",
-            "french": "fra_Latn",
-            "german": "deu_Latn",
-            "italian": "ita_Latn",
-            "japanese": "jpn_Jpan",
-            "korean": "kor_Hang",
-            "portuguese": "por_Latn",
-            "russian": "rus_Cyrl",
-        }
-        
-        source_code = NLLB_LANGUAGE_MAP.get(source_language.lower(), "spa_Latn")
-        target_code = NLLB_LANGUAGE_MAP.get(target_language.lower(), "eng_Latn")
+
+        source_code = get_nllb_code(source_language, default="eng_Latn")
+        target_code = get_nllb_code(target_language, default="eng_Latn")
+        if source_code == target_code:
+            return {
+                "full_text": " ".join(ts.get("text", "") for ts in timestamps).strip(),
+                "segments": timestamps,
+            }
         model_name = "facebook/nllb-200-distilled-600M"
         
         logger.info(f"Loading NLLB translation model for chunked translation...")
@@ -660,104 +718,386 @@ class VideoTranslator:
         output_dir = Path(output_dir) if output_dir else self.config.output_path
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create temp directory for intermediate files
+        target_language_name = get_language_name(target_language)
+        video_info = self.video_processor.get_video_info(input_path)
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
-            # Step 1: Transcribe original audio
+
             logger.info("=" * 50)
-            logger.info("Step 1: Transcribing original audio")
-            transcription = self.transcribe(
+            logger.info("Step 1: Extracting source audio")
+            source_audio_info = self.audio_processor.extract_audio(
                 input_path,
-                output_dir=temp_path,
-                generate_srt=False,
+                output_path=temp_path / f"{input_path.stem}_source.wav",
+                sample_rate=self.config.audio_sample_rate,
+                channels=self.config.audio_channels,
             )
-            logger.info(f"Detected language: {transcription.language}")
-            
-            # Step 2: Translate text (with chunked translation for long videos)
+            source_audio_path = source_audio_info.path
+
             logger.info("=" * 50)
-            logger.info("Step 2: Translating text")
-            
-            # Use chunked translation with timestamps for long videos
-            translated_result = self.translate_text_with_timestamps(
-                transcription.timestamps,
-                transcription.language,
-                target_language,
+            logger.info("Step 2: Running VAD and building segments")
+            vad_regions: List[SpeechRegion] = []
+            if self.config.use_vad:
+                vad_regions = self.vad.detect(source_audio_path)
+                logger.info("VAD regions detected: %d", len(vad_regions))
+
+            regions = self._build_processing_regions(vad_regions, video_info.duration)
+            logger.info("Processing regions prepared: %d", len(regions))
+
+            logger.info("=" * 50)
+            logger.info("Step 3: Per-segment ASR -> translation -> TTS")
+            segment_results: List[SegmentTranslationResult] = []
+            detected_source_language = "auto"
+
+            for idx, region in enumerate(regions):
+                target_duration = max(0.0, region.end - region.start)
+                if target_duration < self.config.min_segment_duration:
+                    continue
+
+                segment_audio_path = temp_path / f"segment_{idx:05d}.wav"
+                self.audio_processor.extract_segment(
+                    input_path=source_audio_path,
+                    output_path=segment_audio_path,
+                    start=region.start,
+                    end=region.end,
+                    sample_rate=self.config.audio_sample_rate,
+                    channels=self.config.audio_channels,
+                )
+
+                asr_result = self.asr.transcribe(
+                    segment_audio_path,
+                    sample_rate=self.config.audio_sample_rate,
+                    return_timestamps=True,
+                )
+                source_text = (asr_result.text or "").strip()
+                if not source_text:
+                    continue
+
+                detected_source_language = asr_result.language or detected_source_language
+
+                # Alignment is best-effort in this flow; translation proceeds regardless.
+                try:
+                    self.aligner.align(
+                        segment_audio_path,
+                        source_text,
+                        language=get_language_name(detected_source_language),
+                    )
+                except Exception as exc:
+                    logger.debug("Alignment skipped for segment %d: %s", idx, exc)
+
+                translated_text = self.translate_text(
+                    text=source_text,
+                    source_language=detected_source_language,
+                    target_language=target_language,
+                )
+                fitted_text = self._fit_translation_to_duration(
+                    translated_text, target_duration=target_duration
+                )
+
+                final_audio_path, actual_duration, final_text = self._synthesize_segment_with_fit(
+                    segment_id=idx,
+                    text=fitted_text,
+                    language=target_language_name,
+                    target_duration=target_duration,
+                    output_dir=temp_path,
+                    voice_clone=voice_clone,
+                    reference_audio=segment_audio_path if voice_clone else None,
+                    reference_text=source_text if voice_clone else None,
+                    speaker=speaker,
+                )
+
+                segment_results.append(
+                    SegmentTranslationResult(
+                        segment_id=idx,
+                        start=region.start,
+                        end=region.end,
+                        source_text=source_text,
+                        translated_text=final_text,
+                        audio_path=final_audio_path,
+                        actual_duration=actual_duration,
+                    )
+                )
+
+            if not segment_results:
+                raise RuntimeError("No translated speech segments were generated")
+
+            logger.info("=" * 50)
+            logger.info("Step 4: Timeline assembly and muxing")
+            final_audio_path = output_dir / f"{input_path.stem}_{target_language}.wav"
+            self.audio_processor.assemble_timeline(
+                segments=[
+                    {"audio_path": seg.audio_path, "start": seg.start}
+                    for seg in segment_results
+                ],
+                output_path=final_audio_path,
+                total_duration=video_info.duration,
+                sample_rate=self.config.audio_sample_rate,
             )
-            translated_text = translated_result['full_text']
-            translated_segments = translated_result['segments']
-            
-            # Save translated text
+
+            video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
+            self.video_processor.replace_audio(
+                input_path,
+                final_audio_path,
+                video_path,
+                audio_delay=0.0,
+            )
+
+            logger.info("=" * 50)
+            logger.info("Step 5: Writing transcript, subtitles, and QA report")
+            translated_text = " ".join(seg.translated_text for seg in segment_results).strip()
             transcript_path = output_dir / f"{input_path.stem}_translated.txt"
             with open(transcript_path, "w", encoding="utf-8") as f:
                 f.write(translated_text)
-            
-            # Step 3: Generate speech in target language
-            logger.info("=" * 50)
-            logger.info("Step 3: Generating speech")
-            audio_path = temp_path / "translated_audio.wav"
-            
-            # Get speech start time from transcription timestamps for alignment
-            speech_start_time = 0.0
-            if transcription.timestamps and len(transcription.timestamps) > 0:
-                first_segment = transcription.timestamps[0]
-                speech_start_time = first_segment.get("start", 0.0)
-                logger.info(f"Speech starts at {speech_start_time:.2f}s in original video")
-            
-            if voice_clone and transcription.audio_path:
-                tts_result = self.synthesize_speech(
-                    text=translated_text,
-                    output_path=audio_path,
-                    language=get_language_name(target_language),
-                    voice_clone=True,
-                    reference_audio=transcription.audio_path,
-                    reference_text=transcription.text,
-                )
-            else:
-                tts_result = self.synthesize_speech(
-                    text=translated_text,
-                    output_path=audio_path,
-                    language=get_language_name(target_language),
-                    speaker=speaker,
-                )
-            
-            # Step 4: Mux audio with video (with proper timing alignment)
-            logger.info("=" * 50)
-            logger.info("Step 4: Muxing audio with video")
-            video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
-            
-            self.video_processor.replace_audio(
-                input_path,
-                audio_path,
-                video_path,
-                audio_delay=speech_start_time,
-            )
-            
-            # Step 5: Generate subtitles (optional)
+
             subtitle_path = None
             if generate_subtitles:
-                logger.info("=" * 50)
-                logger.info("Step 5: Generating subtitles")
-                
-                # Use translated segments with preserved timing from chunked translation
                 subtitle_path = output_dir / f"{input_path.stem}_{target_language}.srt"
-                
-                # Use translated segments from chunked translation (has proper timing)
-                segments = translated_segments if translated_segments else [
-                    {"start": speech_start_time, "end": speech_start_time + 5, "text": translated_text}
+                subtitle_segments = [
+                    {"start": seg.start, "end": seg.end, "text": seg.translated_text}
+                    for seg in segment_results
                 ]
-                
-                logger.info(f"Generating subtitles with {len(segments)} segments")
-                subtitle_path = self.subtitle_generator.generate_srt(segments, subtitle_path)
-            
+                subtitle_path = self.subtitle_generator.generate_srt(
+                    subtitle_segments, subtitle_path
+                )
+
+            self._write_segment_report(
+                output_path=output_dir / f"{input_path.stem}_{target_language}_segments.json",
+                segment_results=segment_results,
+            )
+
             return TranslationResult(
                 video_path=video_path,
-                audio_path=audio_path,
+                audio_path=final_audio_path,
                 transcript_path=transcript_path,
                 subtitle_path=subtitle_path,
-                original_language=transcription.language,
+                original_language=detected_source_language,
                 target_language=target_language,
             )
+
+    def _build_processing_regions(
+        self,
+        vad_regions: List[SpeechRegion],
+        total_duration: float,
+    ) -> List[SpeechRegion]:
+        """Merge and split VAD regions into manageable processing chunks."""
+        if total_duration <= 0:
+            return []
+
+        if not vad_regions:
+            return [SpeechRegion(start=0.0, end=total_duration, confidence=1.0)]
+
+        ordered = sorted(vad_regions, key=lambda r: r.start)
+        grouped: List[SpeechRegion] = []
+        max_len = self.config.max_segment_duration
+        merge_gap = self.config.vad_min_silence_duration_ms / 1000.0
+
+        current_start = ordered[0].start
+        current_end = ordered[0].end
+        current_conf = ordered[0].confidence
+
+        for region in ordered[1:]:
+            gap = region.start - current_end
+            proposed_len = region.end - current_start
+            if gap <= merge_gap and proposed_len <= max_len:
+                current_end = max(current_end, region.end)
+                current_conf = max(current_conf, region.confidence)
+            else:
+                grouped.append(
+                    SpeechRegion(
+                        start=max(0.0, current_start),
+                        end=min(total_duration, current_end),
+                        confidence=current_conf,
+                    )
+                )
+                current_start, current_end, current_conf = (
+                    region.start,
+                    region.end,
+                    region.confidence,
+                )
+
+        grouped.append(
+            SpeechRegion(
+                start=max(0.0, current_start),
+                end=min(total_duration, current_end),
+                confidence=current_conf,
+            )
+        )
+
+        # Split very long regions by max segment duration.
+        split_regions: List[SpeechRegion] = []
+        for region in grouped:
+            duration = region.end - region.start
+            if duration <= max_len:
+                split_regions.append(region)
+                continue
+            start = region.start
+            while start < region.end:
+                end = min(region.end, start + max_len)
+                split_regions.append(
+                    SpeechRegion(start=start, end=end, confidence=region.confidence)
+                )
+                start = end
+
+        return [
+            region
+            for region in split_regions
+            if (region.end - region.start) >= self.config.min_segment_duration
+        ]
+
+    def _fit_translation_to_duration(
+        self,
+        text: str,
+        target_duration: float,
+        chars_per_second: float = 14.0,
+    ) -> str:
+        """Compact text heuristically to better match the target timing window."""
+        cleaned = " ".join((text or "").split())
+        if not cleaned:
+            return cleaned
+
+        if target_duration <= 0:
+            return cleaned
+
+        max_chars = max(20, int(target_duration * chars_per_second))
+        if len(cleaned) <= max_chars:
+            return cleaned
+
+        import re
+
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+        compact_parts: List[str] = []
+        current_len = 0
+        for sentence in sentences:
+            next_len = current_len + len(sentence) + (1 if compact_parts else 0)
+            if next_len > max_chars:
+                break
+            compact_parts.append(sentence)
+            current_len = next_len
+
+        if compact_parts:
+            return " ".join(compact_parts)
+
+        trimmed = cleaned[:max_chars]
+        if " " in trimmed:
+            trimmed = trimmed.rsplit(" ", 1)[0]
+        return trimmed.strip()
+
+    def _synthesize_segment_with_fit(
+        self,
+        segment_id: int,
+        text: str,
+        language: str,
+        target_duration: float,
+        output_dir: Path,
+        voice_clone: bool,
+        reference_audio: Optional[Path],
+        reference_text: Optional[str],
+        speaker: Optional[str],
+    ) -> tuple[Path, float, str]:
+        """Synthesize one segment and fit output timing with retry/retiming."""
+        candidate_text = text
+        fallback_audio_path = output_dir / f"segment_{segment_id:05d}_tts.wav"
+        fallback_duration = 0.0
+
+        attempts = max(0, self.config.max_translation_retries)
+        for attempt in range(attempts + 1):
+            base_audio_path = output_dir / f"segment_{segment_id:05d}_tts_try{attempt}.wav"
+            self.synthesize_speech(
+                text=candidate_text,
+                output_path=base_audio_path,
+                language=language,
+                speaker=speaker,
+                voice_clone=voice_clone and reference_audio is not None,
+                reference_audio=reference_audio,
+                reference_text=reference_text,
+            )
+            base_info = self.audio_processor.get_audio_info(base_audio_path)
+            fallback_audio_path = base_audio_path
+            fallback_duration = base_info.duration
+
+            if target_duration <= 0:
+                return base_audio_path, base_info.duration, candidate_text
+
+            ratio = base_info.duration / target_duration
+            if abs(1.0 - ratio) <= self.config.duration_error_tolerance:
+                return base_audio_path, base_info.duration, candidate_text
+
+            mild_min = 1.0 / self.config.max_retiming_ratio
+            mild_max = self.config.max_retiming_ratio
+            if mild_min <= ratio <= mild_max:
+                stretched_path = output_dir / f"segment_{segment_id:05d}_retimed_try{attempt}.wav"
+                try:
+                    stretched = self.audio_processor.time_stretch_to_duration(
+                        input_path=base_audio_path,
+                        output_path=stretched_path,
+                        target_duration=target_duration,
+                        max_stretch_ratio=self.config.max_retiming_ratio,
+                    )
+                    return stretched_path, stretched.duration, candidate_text
+                except Exception as exc:
+                    logger.debug(
+                        "Retiming failed for segment %d attempt %d: %s",
+                        segment_id,
+                        attempt,
+                        exc,
+                    )
+
+            if attempt < attempts:
+                shrink_target = max(
+                    self.config.min_segment_duration,
+                    target_duration * (0.9 - 0.1 * attempt),
+                )
+                candidate_text = self._fit_translation_to_duration(
+                    candidate_text, target_duration=shrink_target
+                )
+
+        return fallback_audio_path, fallback_duration, candidate_text
+
+    def _write_segment_report(
+        self,
+        output_path: Path,
+        segment_results: List[SegmentTranslationResult],
+    ) -> None:
+        """Write segment details and QA findings for manual review."""
+        import json
+
+        payload = {
+            "segments": [
+                {
+                    "segment_id": seg.segment_id,
+                    "start": seg.start,
+                    "end": seg.end,
+                    "source_text": seg.source_text,
+                    "translated_text": seg.translated_text,
+                    "audio_path": str(seg.audio_path),
+                    "actual_duration": seg.actual_duration,
+                }
+                for seg in segment_results
+            ],
+            "qa_issues": [
+                {
+                    "segment_index": issue.segment_index,
+                    "issue_type": issue.issue_type,
+                    "severity": issue.severity,
+                    "message": issue.message,
+                }
+                for issue in self.segment_qa.validate(
+                    [
+                        {
+                            "start": seg.start,
+                            "end": seg.end,
+                            "actual_duration": seg.actual_duration,
+                            "audio_path": str(seg.audio_path),
+                        }
+                        for seg in segment_results
+                    ]
+                )
+            ],
+        }
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
     
     def unload_models(self) -> None:
         """Unload all models from memory."""

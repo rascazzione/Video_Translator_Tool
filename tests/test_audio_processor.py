@@ -9,16 +9,18 @@ from video_translator.processing.audio import AudioProcessor, AudioInfo
 class TestAudioProcessor:
     """Test AudioProcessor class."""
     
-    def test_init_default(self):
+    def test_init_default(self, monkeypatch):
         """Test default initialization."""
+        monkeypatch.setattr(AudioProcessor, "_verify_ffmpeg", lambda self: None)
         processor = AudioProcessor()
         
         assert processor.ffmpeg_path == "ffmpeg"
         assert processor.sample_rate == 16000
         assert processor.channels == 1
     
-    def test_init_custom(self):
+    def test_init_custom(self, monkeypatch):
         """Test custom initialization."""
+        monkeypatch.setattr(AudioProcessor, "_verify_ffmpeg", lambda self: None)
         processor = AudioProcessor(
             ffmpeg_path="/usr/bin/ffmpeg",
             sample_rate=24000,

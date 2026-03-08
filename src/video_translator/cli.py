@@ -248,6 +248,11 @@ def translate_video(
         "--no-subtitles",
         help="Skip subtitle generation",
     ),
+    disable_vad: bool = typer.Option(
+        False,
+        "--disable-vad",
+        help="Disable VAD segmentation and process as one full segment",
+    ),
     speaker: Optional[str] = typer.Option(
         None,
         "--speaker",
@@ -278,11 +283,14 @@ def translate_video(
         config.qwen_tts_model = "Qwen/Qwen3-TTS-25Hz-0.6B-Base"
     else:
         config.qwen_tts_model = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+
+    config.use_vad = not disable_vad
     
     set_config(config)
     
     console.print(f"🎬 Translating video: [bold]{input_path.name}[/bold]")
     console.print(f"📍 Target language: [bold]{target_language}[/bold]")
+    console.print(f"🧠 VAD segmentation: [bold]{'on' if config.use_vad else 'off'}[/bold]")
     
     try:
         translator = VideoTranslator(config=config)
