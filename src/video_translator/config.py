@@ -182,6 +182,16 @@ class Config(BaseSettings):
             "(0 = auto)"
         ),
     )
+
+    keep_background_audio: bool = Field(
+        default=False,
+        description="Mix original background audio under synthesized translated speech",
+    )
+
+    background_audio_volume: float = Field(
+        default=0.2,
+        description="Background audio mix gain (0.0 to 1.0)",
+    )
     
     # ==================== Paths ====================
     

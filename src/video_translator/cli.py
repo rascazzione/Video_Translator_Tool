@@ -284,6 +284,16 @@ def translate_video(
         "--segment-extract-workers",
         help="CPU workers for parallel segment extraction with FFmpeg (0 = auto)",
     ),
+    keep_background: bool = typer.Option(
+        False,
+        "--keep-background",
+        help="Keep original background audio under translated speech",
+    ),
+    background_volume: Optional[float] = typer.Option(
+        None,
+        "--background-volume",
+        help="Background mix volume in range 0.0-1.0 (used with --keep-background)",
+    ),
 ) -> None:
     """Full video translation pipeline."""
     config = Config()
@@ -306,6 +316,9 @@ def translate_video(
         config.max_translation_retries = max(0, int(max_translation_retries))
     if segment_extract_workers is not None:
         config.segment_extract_workers = max(0, int(segment_extract_workers))
+    config.keep_background_audio = keep_background
+    if background_volume is not None:
+        config.background_audio_volume = min(max(float(background_volume), 0.0), 1.0)
     
     set_config(config)
     
@@ -316,6 +329,9 @@ def translate_video(
     console.print(f"🔁 Max TTS fit retries: [bold]{config.max_translation_retries}[/bold]")
     workers_label = "auto" if config.segment_extract_workers <= 0 else str(config.segment_extract_workers)
     console.print(f"🧵 Segment extract workers: [bold]{workers_label}[/bold]")
+    console.print(f"🎚️ Keep background: [bold]{'on' if config.keep_background_audio else 'off'}[/bold]")
+    if config.keep_background_audio:
+        console.print(f"🎚️ Background volume: [bold]{config.background_audio_volume:.2f}[/bold]")
     
     try:
         translator = VideoTranslator(config=config)
@@ -327,6 +343,8 @@ def translate_video(
             voice_clone=not no_voice_clone,
             generate_subtitles=not no_subtitles,
             speaker=speaker,
+            keep_background=config.keep_background_audio,
+            background_volume=config.background_audio_volume,
         )
         
         console.print("\n[green]✓ Translation complete![/green]")

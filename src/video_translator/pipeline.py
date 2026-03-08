@@ -857,6 +857,8 @@ class VideoTranslator:
         voice_clone: bool = True,
         generate_subtitles: bool = True,
         speaker: Optional[str] = None,
+        keep_background: Optional[bool] = None,
+        background_volume: Optional[float] = None,
     ) -> TranslationResult:
         """Full video translation pipeline.
         
@@ -867,6 +869,8 @@ class VideoTranslator:
             voice_clone: Clone original speaker's voice.
             generate_subtitles: Generate SRT subtitles.
             speaker: Preset speaker (if not voice cloning).
+            keep_background: Keep original background audio under translated voice.
+            background_volume: Background mix gain in range [0.0, 1.0].
         
         Returns:
             TranslationResult with paths to all output files.
@@ -877,6 +881,17 @@ class VideoTranslator:
         
         output_dir = Path(output_dir) if output_dir else self.config.output_path
         output_dir.mkdir(parents=True, exist_ok=True)
+        keep_background = (
+            self.config.keep_background_audio
+            if keep_background is None
+            else bool(keep_background)
+        )
+        background_volume = (
+            self.config.background_audio_volume
+            if background_volume is None
+            else float(background_volume)
+        )
+        background_volume = min(max(background_volume, 0.0), 1.0)
         
         target_language_name = get_language_name(target_language)
         video_info = self.video_processor.get_video_info(input_path)
@@ -1069,15 +1084,33 @@ class VideoTranslator:
             logger.info("=" * 50)
             logger.info("Step 4: Timeline assembly and muxing")
             final_audio_path = output_dir / f"{input_path.stem}_{target_language}.wav"
+            speech_track_path = (
+                temp_path / f"{input_path.stem}_{target_language}_speech.wav"
+                if keep_background
+                else final_audio_path
+            )
             self.audio_processor.assemble_timeline(
                 segments=[
                     {"audio_path": seg.audio_path, "start": seg.start}
                     for seg in segment_results
                 ],
-                output_path=final_audio_path,
+                output_path=speech_track_path,
                 total_duration=video_info.duration,
                 sample_rate=self.config.audio_sample_rate,
             )
+            if keep_background:
+                logger.info(
+                    "Mixing translated speech with background audio (volume=%.2f)",
+                    background_volume,
+                )
+                self.audio_processor.mix_background(
+                    foreground_path=speech_track_path,
+                    background_path=source_audio_path,
+                    output_path=final_audio_path,
+                    background_volume=background_volume,
+                    sample_rate=self.config.audio_sample_rate,
+                    channels=self.config.audio_channels,
+                )
 
             video_path = output_dir / f"{input_path.stem}_{target_language}.mp4"
             self.video_processor.replace_audio(

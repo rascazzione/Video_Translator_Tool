@@ -390,6 +390,56 @@ class AudioProcessor:
         sf.write(str(output_path), mix, sample_rate)
         return self.get_audio_info(output_path)
 
+    def mix_background(
+        self,
+        foreground_path: Path,
+        background_path: Path,
+        output_path: Path,
+        background_volume: float = 0.2,
+        sample_rate: Optional[int] = None,
+        channels: Optional[int] = None,
+    ) -> AudioInfo:
+        """Mix translated foreground with attenuated background audio."""
+        foreground_path = Path(foreground_path)
+        background_path = Path(background_path)
+        output_path = Path(output_path)
+
+        if not foreground_path.exists():
+            raise FileNotFoundError(f"Foreground audio not found: {foreground_path}")
+        if not background_path.exists():
+            raise FileNotFoundError(f"Background audio not found: {background_path}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        sample_rate = sample_rate or self.sample_rate
+        channels = channels or self.channels
+
+        bg_volume = min(max(float(background_volume), 0.0), 1.0)
+        filter_complex = (
+            f"[0:a]volume=1.0[fg];"
+            f"[1:a]volume={bg_volume:.3f}[bg];"
+            "[fg][bg]amix=inputs=2:duration=first:dropout_transition=0,"
+            "alimiter=limit=0.95[mix]"
+        )
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(foreground_path),
+            "-i", str(background_path),
+            "-filter_complex", filter_complex,
+            "-map", "[mix]",
+            "-acodec", "pcm_s16le",
+            "-ar", str(sample_rate),
+            "-ac", str(channels),
+            str(output_path),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg background mix failed: {result.stderr}")
+
+        return self.get_audio_info(output_path)
+
 
 def extract_audio(
     video_path: Path,

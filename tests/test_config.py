@@ -19,6 +19,8 @@ def test_default_config():
     assert config.precision == "bf16"
     assert config.flash_attention is True
     assert config.use_vad is True
+    assert config.keep_background_audio is False
+    assert config.background_audio_volume == 0.2
     assert config.api_port == 8000
 
 

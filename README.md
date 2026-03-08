@@ -9,6 +9,7 @@ An open-source video translation pipeline using **Qwen3** family models (ASR, TT
 - 🛟 **Robust Segmentation Fallback** - if VAD output is unusable, the pipeline falls back to fixed timeline chunks
 - 📝 **Forced Alignment** - Word-level timestamps with Qwen3-ForcedAligner
 - 🗣️ **Text-to-Speech** - Qwen3-TTS with voice cloning and design
+- 🎚️ **Optional Background Mix** - keep original ambiance/music under translated speech
 - ⏱️ **Duration Control** - Segment-level timing fit with mild retiming
 - ⚡ **Cached Translation Backend** - NLLB model/tokenizer are loaded once and reused across segments
 - 🔄 **Full Pipeline** - Video → VAD → ASR → Translation → TTS → QA → Output
@@ -109,6 +110,14 @@ python -m video_translator.cli translate-video \
     --no-voice-clone \
     --asr-model 0.6B \
     --tts-model 0.6B
+
+# 7) Keep original background audio (music/ambience) under translated speech
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --keep-background \
+    --background-volume 0.20
 ```
 
 ## Project Structure
@@ -129,7 +138,8 @@ video_translator/
 │   │   └── subtitles.py    # SRT generation
 │   └── cli.py              # CLI interface
 ├── scripts/
-│   └── download_models.py  # Model download script
+│   ├── download_models.py  # Model download script
+│   └── install_env.sh      # Reproducible environment installer
 ├── requirements.txt
 ├── pyproject.toml
 └── README.md
@@ -158,6 +168,11 @@ OUTPUT_DIR=./output
 MAX_SEGMENT_DURATION=30.0
 MIN_SEGMENT_DURATION=0.4
 MAX_TRANSLATION_RETRIES=2
+SEGMENT_EXTRACT_WORKERS=0   # 0 = auto
+
+# Audio Mix Controls
+KEEP_BACKGROUND_AUDIO=false
+BACKGROUND_AUDIO_VOLUME=0.2
 ```
 
 ## CLI Speed Tuning
@@ -170,6 +185,13 @@ Useful `translate-video` options for performance tuning:
 - `--disable-vad`: skip speech-only detection and chunk the full timeline
 - `--no-voice-clone`: much faster than per-segment voice cloning
 - `--asr-model 0.6B` / `--tts-model 0.6B`: smaller models, lower latency
+- `--keep-background`: retain original background audio in final mix
+- `--background-volume FLOAT`: background gain when mixing (0.0-1.0)
+
+## Runtime Notes
+
+- Translation progress logs are token-based: `processed/total (%)`.
+- Forced aligner is skipped automatically when detected language is unsupported.
 
 ## API Reference
 
