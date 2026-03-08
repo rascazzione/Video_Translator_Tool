@@ -503,6 +503,7 @@ class VideoTranslator:
                     outputs = model.generate(
                         **device_inputs,
                         forced_bos_token_id=target_token_id,
+                        pad_token_id=tokenizer.eos_token_id,
                         max_length=512,
                     )
                 translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -582,6 +583,7 @@ class VideoTranslator:
                 outputs = model.generate(
                     **device_inputs,
                     forced_bos_token_id=target_token_id,
+                    pad_token_id=tokenizer.eos_token_id,
                     max_length=512,
                 )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -719,6 +721,7 @@ class VideoTranslator:
                 outputs = model.generate(
                     **device_inputs,
                     forced_bos_token_id=target_token_id,
+                    pad_token_id=tokenizer.eos_token_id,
                     max_length=512,
                 )
             translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
@@ -906,6 +909,7 @@ class VideoTranslator:
             prepared_segments: List[PreparedSegment] = []
             segment_results: List[SegmentTranslationResult] = []
             detected_source_language = "auto"
+            warned_unsupported_aligner_language = False
 
             segment_jobs: List[tuple[int, SpeechRegion, float, Path]] = []
             for idx, region in enumerate(regions):
@@ -979,14 +983,22 @@ class VideoTranslator:
                 source_language = asr_result.language or detected_source_language
 
                 # Alignment is best-effort in this flow; translation proceeds regardless.
-                try:
-                    self.aligner.align(
-                        segment_audio_path,
-                        source_text,
-                        language=get_language_name(source_language),
+                align_language = get_language_name(source_language)
+                if align_language in self.aligner.SUPPORTED_LANGUAGES:
+                    try:
+                        self.aligner.align(
+                            segment_audio_path,
+                            source_text,
+                            language=align_language,
+                        )
+                    except Exception as exc:
+                        logger.debug("Alignment skipped for segment %d: %s", idx, exc)
+                elif not warned_unsupported_aligner_language:
+                    logger.info(
+                        "Skipping forced alignment for unsupported language: %s",
+                        align_language,
                     )
-                except Exception as exc:
-                    logger.debug("Alignment skipped for segment %d: %s", idx, exc)
+                    warned_unsupported_aligner_language = True
 
                 token_count = self._count_translation_tokens(
                     text=source_text,

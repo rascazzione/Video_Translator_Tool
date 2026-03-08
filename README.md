@@ -26,6 +26,14 @@ An open-source video translation pipeline using **Qwen3** family models (ASR, TT
 
 ### Installation
 
+One-command installer:
+
+```bash
+bash scripts/install_env.sh
+```
+
+Manual install:
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/video_translator.git
@@ -37,11 +45,25 @@ source venv/bin/activate  # Linux/Mac
 # or
 .\venv\Scripts\activate  # Windows
 
-# Install dependencies
+# Install base dependencies
 pip install -r requirements.txt
+
+# qwen-asr is installed separately due to upstream transformers pin conflict
+pip install --no-deps qwen-asr==0.0.6
+
+# Install project in editable mode
+pip install -e . --no-deps
 
 # Download models (optional - models download on first use)
 python scripts/download_models.py
+```
+
+Using `uv`:
+
+```bash
+uv pip install -r requirements.txt
+uv pip install --no-deps qwen-asr==0.0.6
+uv pip install -e . --no-deps
 ```
 
 ### Basic Usage
