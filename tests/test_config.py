@@ -21,6 +21,8 @@ def test_default_config():
     assert config.use_vad is True
     assert config.keep_background_audio is False
     assert config.background_audio_volume == 0.2
+    assert config.embed_subtitles is False
+    assert config.subtitle_mode == "translated"
     assert config.api_port == 8000
 
 

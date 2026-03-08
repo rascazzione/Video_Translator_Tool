@@ -118,6 +118,14 @@ python -m video_translator.cli translate-video \
     --output ./output \
     --keep-background \
     --background-volume 0.20
+
+# 8) Burn subtitles in video: original, translated, or both (stacked lines)
+python -m video_translator.cli translate-video \
+    video.mp4 \
+    es \
+    --output ./output \
+    --embed-subtitles \
+    --subtitle-mode both
 ```
 
 ## Project Structure
@@ -173,6 +181,10 @@ SEGMENT_EXTRACT_WORKERS=0   # 0 = auto
 # Audio Mix Controls
 KEEP_BACKGROUND_AUDIO=false
 BACKGROUND_AUDIO_VOLUME=0.2
+
+# Subtitle Controls
+EMBED_SUBTITLES=false
+SUBTITLE_MODE=translated   # original | translated | both
 ```
 
 ## CLI Speed Tuning
@@ -187,6 +199,8 @@ Useful `translate-video` options for performance tuning:
 - `--asr-model 0.6B` / `--tts-model 0.6B`: smaller models, lower latency
 - `--keep-background`: retain original background audio in final mix
 - `--background-volume FLOAT`: background gain when mixing (0.0-1.0)
+- `--embed-subtitles`: burn subtitles into output video
+- `--subtitle-mode original|translated|both`: subtitle text mode
 
 ## Runtime Notes
 

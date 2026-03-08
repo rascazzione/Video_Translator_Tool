@@ -294,6 +294,16 @@ def translate_video(
         "--background-volume",
         help="Background mix volume in range 0.0-1.0 (used with --keep-background)",
     ),
+    embed_subtitles: bool = typer.Option(
+        False,
+        "--embed-subtitles",
+        help="Burn subtitles into the output video",
+    ),
+    subtitle_mode: str = typer.Option(
+        "translated",
+        "--subtitle-mode",
+        help="Subtitle mode: original, translated, both",
+    ),
 ) -> None:
     """Full video translation pipeline."""
     config = Config()
@@ -316,9 +326,16 @@ def translate_video(
         config.max_translation_retries = max(0, int(max_translation_retries))
     if segment_extract_workers is not None:
         config.segment_extract_workers = max(0, int(segment_extract_workers))
+    subtitle_mode_normalized = (subtitle_mode or "translated").strip().lower()
+    if subtitle_mode_normalized not in {"original", "translated", "both"}:
+        raise typer.BadParameter(
+            "Invalid value for --subtitle-mode. Use: original, translated, both"
+        )
     config.keep_background_audio = keep_background
     if background_volume is not None:
         config.background_audio_volume = min(max(float(background_volume), 0.0), 1.0)
+    config.embed_subtitles = embed_subtitles
+    config.subtitle_mode = subtitle_mode_normalized
     
     set_config(config)
     
@@ -332,6 +349,9 @@ def translate_video(
     console.print(f"🎚️ Keep background: [bold]{'on' if config.keep_background_audio else 'off'}[/bold]")
     if config.keep_background_audio:
         console.print(f"🎚️ Background volume: [bold]{config.background_audio_volume:.2f}[/bold]")
+    console.print(f"📝 Embed subtitles: [bold]{'on' if config.embed_subtitles else 'off'}[/bold]")
+    if config.embed_subtitles or (not no_subtitles):
+        console.print(f"📝 Subtitle mode: [bold]{config.subtitle_mode}[/bold]")
     
     try:
         translator = VideoTranslator(config=config)
@@ -345,6 +365,8 @@ def translate_video(
             speaker=speaker,
             keep_background=config.keep_background_audio,
             background_volume=config.background_audio_volume,
+            embed_subtitles=config.embed_subtitles,
+            subtitle_mode=config.subtitle_mode,
         )
         
         console.print("\n[green]✓ Translation complete![/green]")

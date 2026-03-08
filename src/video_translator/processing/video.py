@@ -208,6 +208,49 @@ class VideoProcessor:
             raise RuntimeError(f"FFmpeg failed: {result.stderr}")
         
         return self.get_video_info(output_path)
+
+    def burn_subtitles(
+        self,
+        video_path: Path,
+        subtitle_path: Path,
+        output_path: Path,
+    ) -> VideoInfo:
+        """Burn subtitles into the video (hard subtitles)."""
+        video_path = Path(video_path)
+        subtitle_path = Path(subtitle_path)
+        output_path = Path(output_path)
+
+        if not video_path.exists():
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        if not subtitle_path.exists():
+            raise FileNotFoundError(f"Subtitle file not found: {subtitle_path}")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        subtitle_filter_path = (
+            subtitle_path.resolve().as_posix().replace("\\", "/").replace(":", r"\:")
+        )
+        subtitle_filter_path = subtitle_filter_path.replace("'", r"\'")
+        subtitle_filter = f"subtitles='{subtitle_filter_path}'"
+
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", str(video_path),
+            "-vf", subtitle_filter,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-c:a", "copy",
+            str(output_path),
+        ]
+
+        logger.info("Burning subtitles into video: %s", output_path.name)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"FFmpeg subtitle burn failed: {result.stderr}")
+
+        return self.get_video_info(output_path)
     
     def get_video_info(self, video_path: Path) -> VideoInfo:
         """Get information about a video file using FFprobe."""

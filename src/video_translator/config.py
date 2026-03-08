@@ -192,6 +192,16 @@ class Config(BaseSettings):
         default=0.2,
         description="Background audio mix gain (0.0 to 1.0)",
     )
+
+    embed_subtitles: bool = Field(
+        default=False,
+        description="Burn subtitles into final video",
+    )
+
+    subtitle_mode: Literal["original", "translated", "both"] = Field(
+        default="translated",
+        description="Subtitle text mode: original, translated, or both",
+    )
     
     # ==================== Paths ====================
     

@@ -6,7 +6,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from .config import Config, get_config
 from .models.asr import QwenASR
@@ -859,6 +859,8 @@ class VideoTranslator:
         speaker: Optional[str] = None,
         keep_background: Optional[bool] = None,
         background_volume: Optional[float] = None,
+        embed_subtitles: Optional[bool] = None,
+        subtitle_mode: Optional[Literal["original", "translated", "both"]] = None,
     ) -> TranslationResult:
         """Full video translation pipeline.
         
@@ -871,6 +873,8 @@ class VideoTranslator:
             speaker: Preset speaker (if not voice cloning).
             keep_background: Keep original background audio under translated voice.
             background_volume: Background mix gain in range [0.0, 1.0].
+            embed_subtitles: Burn subtitles into final video.
+            subtitle_mode: Subtitle text mode: original, translated, both.
         
         Returns:
             TranslationResult with paths to all output files.
@@ -892,6 +896,18 @@ class VideoTranslator:
             else float(background_volume)
         )
         background_volume = min(max(background_volume, 0.0), 1.0)
+        embed_subtitles = (
+            self.config.embed_subtitles
+            if embed_subtitles is None
+            else bool(embed_subtitles)
+        )
+        subtitle_mode = (
+            self.config.subtitle_mode
+            if subtitle_mode is None
+            else subtitle_mode
+        )
+        if subtitle_mode not in {"original", "translated", "both"}:
+            raise ValueError(f"Invalid subtitle_mode: {subtitle_mode}")
         
         target_language_name = get_language_name(target_language)
         video_info = self.video_processor.get_video_info(input_path)
@@ -1128,15 +1144,24 @@ class VideoTranslator:
                 f.write(translated_text)
 
             subtitle_path = None
-            if generate_subtitles:
+            if generate_subtitles or embed_subtitles:
                 subtitle_path = output_dir / f"{input_path.stem}_{target_language}.srt"
-                subtitle_segments = [
-                    {"start": seg.start, "end": seg.end, "text": seg.translated_text}
-                    for seg in segment_results
-                ]
+                subtitle_segments = self._build_subtitle_segments(
+                    segment_results=segment_results,
+                    mode=subtitle_mode,
+                )
                 subtitle_path = self.subtitle_generator.generate_srt(
                     subtitle_segments, subtitle_path
                 )
+
+            if embed_subtitles and subtitle_path is not None:
+                burned_video_path = output_dir / f"{input_path.stem}_{target_language}_burned.mp4"
+                self.video_processor.burn_subtitles(
+                    video_path=video_path,
+                    subtitle_path=subtitle_path,
+                    output_path=burned_video_path,
+                )
+                video_path = burned_video_path
 
             self._write_segment_report(
                 output_path=output_dir / f"{input_path.stem}_{target_language}_segments.json",
@@ -1151,6 +1176,26 @@ class VideoTranslator:
                 original_language=detected_source_language,
                 target_language=target_language,
             )
+
+    def _build_subtitle_segments(
+        self,
+        segment_results: List[SegmentTranslationResult],
+        mode: Literal["original", "translated", "both"],
+    ) -> List[Dict[str, Any]]:
+        """Build subtitle segments according to requested subtitle mode."""
+        subtitle_segments: List[Dict[str, Any]] = []
+        for seg in segment_results:
+            original = (seg.source_text or "").strip()
+            translated = (seg.translated_text or "").strip()
+            if mode == "original":
+                text = original
+            elif mode == "both":
+                text = f"{original}\n{translated}".strip()
+            else:
+                text = translated
+
+            subtitle_segments.append({"start": seg.start, "end": seg.end, "text": text})
+        return subtitle_segments
 
     def _build_processing_regions(
         self,
