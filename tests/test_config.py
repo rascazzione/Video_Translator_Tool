@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from video_translator import cli
 from video_translator.config import Config, get_config, set_config
 
 
@@ -78,3 +79,18 @@ def test_set_config():
     set_config(custom_config)
     
     assert get_config() is custom_config
+
+
+def test_cli_build_config_uses_env_file_override(tmp_path):
+    """CLI config builder should respect a user-provided env file."""
+    env_file = tmp_path / "custom.env"
+    env_file.write_text("DEVICE=cpu\nAPI_PORT=9100\n", encoding="utf-8")
+
+    cli._config_file_override = env_file
+    try:
+        config = cli._build_config()
+    finally:
+        cli._config_file_override = None
+
+    assert config.device == "cpu"
+    assert config.api_port == 9100

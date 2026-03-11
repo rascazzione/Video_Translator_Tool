@@ -1,6 +1,5 @@
 """Configuration management for Video Translator."""
 
-import os
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -201,6 +200,26 @@ class Config(BaseSettings):
     subtitle_mode: Literal["original", "translated", "both"] = Field(
         default="translated",
         description="Subtitle text mode: original, translated, or both",
+    )
+
+    subtitle_merge_gap: float = Field(
+        default=0.35,
+        description="Maximum gap in seconds to merge adjacent subtitle cues",
+    )
+
+    subtitle_max_lines: int = Field(
+        default=2,
+        description="Maximum lines per merged subtitle cue",
+    )
+
+    subtitle_max_chars: int = Field(
+        default=42,
+        description="Maximum characters before splitting a subtitle cue",
+    )
+
+    subtitle_max_duration: float = Field(
+        default=6.0,
+        description="Maximum duration in seconds for a split subtitle cue",
     )
     
     # ==================== Paths ====================

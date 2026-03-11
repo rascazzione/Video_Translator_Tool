@@ -1,5 +1,7 @@
 # Video Translator Application - Technical Architecture
 
+This document has been superseded by [`docs/architecture.md`](./architecture.md), which reflects the current code paths more accurately.
+
 ## Overview
 
 The Video Translator is an AI-powered pipeline that translates video content from source language to target language while maintaining temporal synchronization. It uses Qwen3 models (ASR, TTS, ForcedAligner) and Silero VAD for voice activity detection.

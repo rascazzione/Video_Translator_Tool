@@ -24,6 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 console = Console()
+_config_file_override: Optional[Path] = None
 
 # Create Typer app
 app = typer.Typer(
@@ -31,6 +32,13 @@ app = typer.Typer(
     help="Video translation pipeline using Qwen3 models",
     add_completion=False,
 )
+
+
+def _build_config() -> Config:
+    """Build config, optionally loading overrides from a CLI-provided env file."""
+    if _config_file_override is not None:
+        return Config(_env_file=_config_file_override)
+    return Config()
 
 
 def _notify_completion() -> None:
@@ -76,13 +84,14 @@ def main(
     ),
 ) -> None:
     """Video Translator CLI - Translate videos using AI."""
+    global _config_file_override
+
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     if config_file and config_file.exists():
-        # Load config from file
-        # In production, parse and set config
-        logger.info(f"Config file: {config_file}")
+        _config_file_override = config_file
+        logger.info("Loading config from %s", config_file)
 
 
 @app.command("transcribe")
@@ -117,8 +126,8 @@ def transcribe(
     ),
 ) -> None:
     """Transcribe audio from video file."""
-    config = Config()
-    
+    config = _build_config()
+
     # Select model based on size
     if model == "0.6B":
         config.qwen_asr_model = "Qwen/Qwen3-ASR-0.6B"
@@ -126,7 +135,7 @@ def transcribe(
         config.qwen_asr_model = "Qwen/Qwen3-ASR-1.7B"
     
     set_config(config)
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -199,9 +208,9 @@ def text_to_speech(
     ),
 ) -> None:
     """Generate speech from text."""
-    config = Config()
+    config = _build_config()
     set_config(config)
-    
+
     # Read input text
     with open(input_path, "r", encoding="utf-8") as f:
         text = f.read().strip()
@@ -330,8 +339,8 @@ def translate_video(
     ),
 ) -> None:
     """Full video translation pipeline."""
-    config = Config()
-    
+    config = _build_config()
+
     # Select models
     if asr_model == "0.6B":
         config.qwen_asr_model = "Qwen/Qwen3-ASR-0.6B"
@@ -447,9 +456,9 @@ def align(
     ),
 ) -> None:
     """Align audio with text to get word-level timestamps."""
-    config = Config()
+    config = _build_config()
     set_config(config)
-    
+
     console.print(f"📍 Aligning: [bold]{audio_path.name}[/bold]")
     
     try:

@@ -143,6 +143,20 @@ class SegmentTranslationResult:
     translated_text: str
     audio_path: Path
     actual_duration: float
+    source_language: str = ""
+    translation_status: str = "translated"
+    translation_error: Optional[str] = None
+
+
+@dataclass
+class TextTranslationResult:
+    """Translation text plus status metadata for reporting and recovery."""
+
+    text: str
+    status: str
+    source_language: str
+    target_language: str
+    error: Optional[str] = None
 
 
 @dataclass
@@ -484,12 +498,32 @@ class VideoTranslator:
         Returns:
             Translated text.
         """
+        return self._translate_text_result(
+            text=text,
+            source_language=source_language,
+            target_language=target_language,
+            max_tokens=max_tokens,
+        ).text
+
+    def _translate_text_result(
+        self,
+        text: str,
+        source_language: str,
+        target_language: str,
+        max_tokens: int = 800,
+    ) -> TextTranslationResult:
+        """Translate text and preserve status for downstream reporting."""
         import torch
 
         source_code = get_nllb_code(source_language, default="eng_Latn")
         target_code = get_nllb_code(target_language, default="eng_Latn")
         if source_code == target_code:
-            return text
+            return TextTranslationResult(
+                text=text,
+                status="skipped_same_language",
+                source_language=source_language,
+                target_language=target_language,
+            )
 
         try:
             model, tokenizer, device = self._get_translation_backend(source_code)
@@ -512,17 +546,34 @@ class VideoTranslator:
                     )
                 translated = tokenizer.decode(outputs[0], skip_special_tokens=True)
                 logger.info(f"Translation: '{text[:50]}...' -> '{translated[:50]}...'")
-                return translated
+                return TextTranslationResult(
+                    text=translated,
+                    status="translated",
+                    source_language=source_language,
+                    target_language=target_language,
+                )
             else:
                 # Split into chunks and translate each
                 logger.info(f"Translating {input_length} tokens (chunked, max {max_tokens} per chunk)")
-                return self._translate_chunked(
+                translated = self._translate_chunked(
                     text, tokenizer, model, source_code, target_code, device, max_tokens
+                )
+                return TextTranslationResult(
+                    text=translated,
+                    status="translated",
+                    source_language=source_language,
+                    target_language=target_language,
                 )
         except Exception as e:
             logger.error(f"Translation error: {e}")
-            # Fallback: return original text
-            return text
+            # Fallback: return original text with explicit status metadata.
+            return TextTranslationResult(
+                text=text,
+                status="fallback_original",
+                source_language=source_language,
+                target_language=target_language,
+                error=str(e),
+            )
     
     def _translate_chunked(
         self,
@@ -1097,11 +1148,18 @@ class VideoTranslator:
             self._log_translation_progress()
 
             for segment in prepared_segments:
-                translated_text = self.translate_text(
+                translation_result = self._translate_text_result(
                     text=segment.source_text,
                     source_language=segment.source_language,
                     target_language=target_language,
                 )
+                translated_text = translation_result.text
+                if translation_result.status == "fallback_original":
+                    logger.warning(
+                        "Segment %d translation fell back to original text: %s",
+                        segment.segment_id,
+                        translation_result.error or "unknown translation error",
+                    )
                 # Keep full translation text by default; timing compression is only
                 # applied inside retry logic when explicitly needed.
                 fitted_text = translated_text
@@ -1127,6 +1185,9 @@ class VideoTranslator:
                         translated_text=final_text,
                         audio_path=final_audio_path,
                         actual_duration=actual_duration,
+                        source_language=segment.source_language,
+                        translation_status=translation_result.status,
+                        translation_error=translation_result.error,
                     )
                 )
                 self._advance_translation_progress(segment.token_count)
@@ -1234,7 +1295,31 @@ class VideoTranslator:
                 text = translated
 
             subtitle_segments.append({"start": seg.start, "end": seg.end, "text": text})
-        return subtitle_segments
+
+        if not subtitle_segments:
+            return subtitle_segments
+
+        # Keep bilingual subtitles one cue per segment to avoid producing
+        # oversized stacked blocks after merge/split processing.
+        if mode == "both":
+            return subtitle_segments
+
+        optimized_segments = self.subtitle_generator.merge_segments(
+            subtitle_segments,
+            max_gap=self.config.subtitle_merge_gap,
+            max_lines=self.config.subtitle_max_lines,
+        )
+
+        split_segments: List[Dict[str, Any]] = []
+        for seg in optimized_segments:
+            split_segments.extend(
+                self.subtitle_generator.split_long_segment(
+                    seg,
+                    max_chars=self.config.subtitle_max_chars,
+                    max_duration=self.config.subtitle_max_duration,
+                )
+            )
+        return split_segments
 
     def _build_processing_regions(
         self,
@@ -1462,8 +1547,11 @@ class VideoTranslator:
                     "segment_id": seg.segment_id,
                     "start": seg.start,
                     "end": seg.end,
+                    "source_language": seg.source_language,
                     "source_text": seg.source_text,
                     "translated_text": seg.translated_text,
+                    "translation_status": seg.translation_status,
+                    "translation_error": seg.translation_error,
                     "audio_path": str(seg.audio_path),
                     "actual_duration": seg.actual_duration,
                 }
